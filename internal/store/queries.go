@@ -286,3 +286,12 @@ func (s *Store) SenderName(senderJID string) string {
 	}
 	return senderJID
 }
+
+// ChatName returns the stored name for a chat, or "" when unknown.
+func (s *Store) ChatName(jid string) string {
+	var name string
+	if err := s.db.QueryRow("SELECT IFNULL(name,'') FROM chats WHERE jid = ?", jid).Scan(&name); err != nil {
+		return ""
+	}
+	return name
+}

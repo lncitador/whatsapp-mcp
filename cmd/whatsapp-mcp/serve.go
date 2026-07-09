@@ -11,6 +11,7 @@ import (
 
 	"github.com/lncitador/whatsapp-mcp/internal/api"
 	"github.com/lncitador/whatsapp-mcp/internal/config"
+	"github.com/lncitador/whatsapp-mcp/internal/daemonctl"
 	"github.com/lncitador/whatsapp-mcp/internal/store"
 	"github.com/lncitador/whatsapp-mcp/internal/wa"
 )
@@ -20,11 +21,23 @@ func runServe(version string) error {
 		return fmt.Errorf("ensure dirs: %w", err)
 	}
 
+	port := config.Port()
+	if err := daemonctl.TakeoverPort(port); err != nil {
+		return fmt.Errorf("takeover port: %w", err)
+	}
+
 	pidPath := config.PIDFile()
-	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
+	ownPID := fmt.Sprintf("%d", os.Getpid())
+	if err := os.WriteFile(pidPath, []byte(ownPID), 0644); err != nil {
 		return fmt.Errorf("write pid: %w", err)
 	}
-	defer os.Remove(pidPath)
+	// Only remove the PID file if it still holds our PID — a takeover may
+	// have rewritten it while this process was shutting down.
+	defer func() {
+		if data, err := os.ReadFile(pidPath); err == nil && string(data) == ownPID {
+			os.Remove(pidPath)
+		}
+	}()
 
 	st, err := store.Open()
 	if err != nil {
@@ -54,7 +67,6 @@ func runServe(version string) error {
 		},
 	})
 
-	port := config.Port()
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe(port) }()
 
@@ -66,6 +78,8 @@ func runServe(version string) error {
 	select {
 	case sig := <-sigCh:
 		log.Printf("received %s, shutting down", sig)
+	case <-ctx.Done():
+		log.Printf("shutdown requested via API")
 	case err := <-errCh:
 		log.Printf("server error: %v", err)
 	}

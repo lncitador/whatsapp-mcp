@@ -46,6 +46,16 @@ case ":$PATH:" in
   *":$dest:"*) ;;
   *) echo "NOTE: add $dest to your PATH" ;;
 esac
+
+# Install the agent skill globally via npx skills
+if command -v npx >/dev/null 2>&1; then
+  echo "installing agent skill..."
+  npx -y skills@latest add "https://github.com/$REPO" --skill whatsapp-bridge --global -y 2>/dev/null || \
+    echo "NOTE: skill install skipped (npx failed). Install manually: npx skills@latest add https://github.com/$REPO --skill whatsapp-bridge --global"
+else
+  echo "NOTE: npx not found. Install the skill manually: npx skills@latest add https://github.com/$REPO --skill whatsapp-bridge --global"
+fi
+
 echo ""
 echo "next steps:"
 echo "  claude mcp add whatsapp -- whatsapp-mcp stdio"

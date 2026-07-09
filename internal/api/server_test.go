@@ -76,8 +76,30 @@ func TestRPCSendMessage(t *testing.T) {
 	ts, f, _ := newTestServer(t)
 	resp, _ := http.Post(ts.URL+"/api/rpc/send_message", "application/json",
 		strings.NewReader(`{"recipient":"5511999999999","message":"oi"}`))
-	if resp.StatusCode != 200 || len(f.sent) != 1 || f.sent[0][1] != "oi" {
-		t.Fatalf("status=%d sent=%v", resp.StatusCode, f.sent)
+	var body struct {
+		Result struct {
+			Success   bool   `json:"success"`
+			Message   string `json:"message"`
+			RequestID string `json:"request_id,omitempty"`
+			Status    string `json:"status,omitempty"`
+		} `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if resp.StatusCode != 200 || body.Result.Status != "pending_approval" || body.Result.RequestID == "" {
+		t.Fatalf("status=%d body=%+v", resp.StatusCode, body.Result)
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("should not have sent yet: %v", f.sent)
+	}
+
+	// Approve the request
+	resp2, _ := http.Post(ts.URL+"/api/approve/"+body.Result.RequestID, "application/json",
+		strings.NewReader(`{}`))
+	if resp2.StatusCode != 200 {
+		t.Fatalf("approve: want 200, got %d", resp2.StatusCode)
+	}
+	if len(f.sent) != 1 || f.sent[0][1] != "oi" {
+		t.Fatalf("want 1 sent with 'oi', got %v", f.sent)
 	}
 }
 
@@ -147,11 +169,29 @@ func TestSendFileAcceptsValidPath(t *testing.T) {
 
 	resp, _ := http.Post(ts.URL+"/api/rpc/send_file", "application/json",
 		strings.NewReader(fmt.Sprintf(`{"recipient":"5511999999999","media_path":"%s"}`, photo)))
-	if resp.StatusCode != 200 {
-		t.Fatalf("want 200, got %d", resp.StatusCode)
+	var body struct {
+		Result struct {
+			Success   bool   `json:"success"`
+			Status    string `json:"status"`
+			RequestID string `json:"request_id"`
+		} `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if resp.StatusCode != 200 || body.Result.Status != "pending_approval" || body.Result.RequestID == "" {
+		t.Fatalf("want pending_approval, got status=%d body=%+v", resp.StatusCode, body.Result)
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("should not have sent yet: %v", f.sent)
+	}
+
+	// Approve
+	resp2, _ := http.Post(ts.URL+"/api/approve/"+body.Result.RequestID, "application/json",
+		strings.NewReader(`{}`))
+	if resp2.StatusCode != 200 {
+		t.Fatalf("approve: want 200, got %d", resp2.StatusCode)
 	}
 	if len(f.sent) != 1 {
-		t.Fatalf("want 1 sent, got %d", len(f.sent))
+		t.Fatalf("want 1 sent after approval, got %d", len(f.sent))
 	}
 }
 
@@ -201,10 +241,104 @@ func TestSendAudioAcceptsValidPath(t *testing.T) {
 
 	resp, _ := http.Post(ts.URL+"/api/rpc/send_audio_message", "application/json",
 		strings.NewReader(fmt.Sprintf(`{"recipient":"5511999999999","media_path":"%s"}`, audio)))
-	if resp.StatusCode != 200 {
-		t.Fatalf("want 200, got %d", resp.StatusCode)
+	var body struct {
+		Result struct {
+			Success   bool   `json:"success"`
+			Status    string `json:"status"`
+			RequestID string `json:"request_id"`
+		} `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if resp.StatusCode != 200 || body.Result.Status != "pending_approval" || body.Result.RequestID == "" {
+		t.Fatalf("want pending_approval, got status=%d body=%+v", resp.StatusCode, body.Result)
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("should not have sent yet: %v", f.sent)
+	}
+
+	// Approve
+	resp2, _ := http.Post(ts.URL+"/api/approve/"+body.Result.RequestID, "application/json",
+		strings.NewReader(`{}`))
+	if resp2.StatusCode != 200 {
+		t.Fatalf("approve: want 200, got %d", resp2.StatusCode)
 	}
 	if len(f.sent) != 1 {
-		t.Fatalf("want 1 sent, got %d", len(f.sent))
+		t.Fatalf("want 1 sent after approval, got %d", len(f.sent))
+	}
+}
+
+func TestSendMessageRequiresApproval(t *testing.T) {
+	ts, f, _ := newTestServer(t)
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_message", "application/json",
+		strings.NewReader(`{"recipient":"5511999999999","message":"test"}`))
+	var body struct {
+		Result struct {
+			Success   bool   `json:"success"`
+			Message   string `json:"message"`
+			RequestID string `json:"request_id,omitempty"`
+			Status    string `json:"status,omitempty"`
+		} `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body.Result.Status != "pending_approval" {
+		t.Fatalf("want pending_approval, got %+v", body.Result)
+	}
+	if body.Result.RequestID == "" {
+		t.Fatal("want non-empty request_id")
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("should not have sent yet: %v", f.sent)
+	}
+
+	// Approve the request
+	resp2, _ := http.Post(ts.URL+"/api/approve/"+body.Result.RequestID, "application/json",
+		strings.NewReader(`{}`))
+	if resp2.StatusCode != 200 {
+		t.Fatalf("approve: want 200, got %d", resp2.StatusCode)
+	}
+	if len(f.sent) != 1 {
+		t.Fatalf("want 1 sent after approval, got %d", len(f.sent))
+	}
+}
+
+func TestSendMessageReject(t *testing.T) {
+	ts, f, _ := newTestServer(t)
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_message", "application/json",
+		strings.NewReader(`{"recipient":"5511999999999","message":"test"}`))
+	var body struct {
+		Result struct {
+			RequestID string `json:"request_id,omitempty"`
+		} `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+
+	// Reject the request
+	resp2, _ := http.Post(ts.URL+"/api/reject/"+body.Result.RequestID, "application/json",
+		strings.NewReader(`{}`))
+	if resp2.StatusCode != 200 {
+		t.Fatalf("reject: want 200, got %d", resp2.StatusCode)
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("should not have sent after rejection: %v", f.sent)
+	}
+}
+
+func TestApproveNotFound(t *testing.T) {
+	ts, _, _ := newTestServer(t)
+	resp, _ := http.Post(ts.URL+"/api/approve/req_nonexistent", "application/json",
+		strings.NewReader(`{}`))
+	if resp.StatusCode != 404 {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestRejectNotFound(t *testing.T) {
+	ts, _, _ := newTestServer(t)
+	resp, _ := http.Post(ts.URL+"/api/reject/req_nonexistent", "application/json",
+		strings.NewReader(`{}`))
+	if resp.StatusCode != 404 {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
 	}
 }

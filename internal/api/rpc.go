@@ -127,8 +127,13 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "recipient must be provided")
 			return
 		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, a.Message, "")
-		respond(w, map[string]any{"success": ok, "message": msg}, nil)
+		reqID := s.approvals.Create("send_message", a.Recipient, a.Message, "")
+		respond(w, map[string]any{
+			"success":    false,
+			"status":     "pending_approval",
+			"request_id": reqID,
+			"message":    "Send requires approval. Call /api/approve/" + reqID + " to confirm or /api/reject/" + reqID + " to cancel.",
+		}, nil)
 	case "send_file":
 		if a.Recipient == "" || a.MediaPath == "" {
 			writeError(w, 400, "recipient and media_path must be provided")
@@ -139,8 +144,13 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, err.Error())
 			return
 		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, "", cleanPath)
-		respond(w, map[string]any{"success": ok, "message": msg}, nil)
+		reqID := s.approvals.Create("send_file", a.Recipient, "", cleanPath)
+		respond(w, map[string]any{
+			"success":    false,
+			"status":     "pending_approval",
+			"request_id": reqID,
+			"message":    "Send requires approval. Call /api/approve/" + reqID + " to confirm or /api/reject/" + reqID + " to cancel.",
+		}, nil)
 	case "send_audio_message":
 		if a.Recipient == "" || a.MediaPath == "" {
 			writeError(w, 400, "recipient and media_path must be provided")
@@ -161,8 +171,13 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			defer os.Remove(converted)
 			path = converted
 		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, "", path)
-		respond(w, map[string]any{"success": ok, "message": msg}, nil)
+		reqID := s.approvals.Create("send_audio_message", a.Recipient, "", path)
+		respond(w, map[string]any{
+			"success":    false,
+			"status":     "pending_approval",
+			"request_id": reqID,
+			"message":    "Send requires approval. Call /api/approve/" + reqID + " to confirm or /api/reject/" + reqID + " to cancel.",
+		}, nil)
 	case "download_media":
 		path, mediaType, filename, err := s.deps.WA.DownloadMedia(a.MessageID, a.ChatJID)
 		if err != nil {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/lncitador/whatsapp-mcp/internal/store"
@@ -27,18 +28,63 @@ type Deps struct {
 	OnShutdown func()
 }
 
+type pendingRequest struct {
+	ID        string
+	Tool      string
+	Recipient string
+	Message   string
+	MediaPath string
+	CreatedAt time.Time
+}
+
+type approvalSystem struct {
+	mu       sync.Mutex
+	requests map[string]*pendingRequest
+}
+
+func newApprovalSystem() *approvalSystem {
+	return &approvalSystem{requests: make(map[string]*pendingRequest)}
+}
+
+func (a *approvalSystem) Create(tool, recipient, message, mediaPath string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	id := fmt.Sprintf("req_%d", time.Now().UnixNano())
+	a.requests[id] = &pendingRequest{
+		ID: id, Tool: tool, Recipient: recipient,
+		Message: message, MediaPath: mediaPath,
+		CreatedAt: time.Now(),
+	}
+	return id
+}
+
+func (a *approvalSystem) Get(id string) (*pendingRequest, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	r, ok := a.requests[id]
+	return r, ok
+}
+
+func (a *approvalSystem) Remove(id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.requests, id)
+}
+
 type Server struct {
-	deps    Deps
-	mux     *http.ServeMux
-	http    *http.Server
-	rateLim *rateLimiter
+	deps      Deps
+	mux       *http.ServeMux
+	http      *http.Server
+	rateLim   *rateLimiter
+	approvals *approvalSystem
 }
 
 func New(deps Deps) *Server {
 	s := &Server{
-		deps:    deps,
-		mux:     http.NewServeMux(),
-		rateLim: newRateLimiter(10, time.Minute),
+		deps:      deps,
+		mux:       http.NewServeMux(),
+		rateLim:   newRateLimiter(10, time.Minute),
+		approvals: newApprovalSystem(),
 	}
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true, "version": deps.Version})
@@ -52,6 +98,8 @@ func New(deps Deps) *Server {
 			go deps.OnShutdown()
 		}
 	})
+	s.mux.HandleFunc("POST /api/approve/{request_id}", s.handleApprove)
+	s.mux.HandleFunc("POST /api/reject/{request_id}", s.handleReject)
 	s.mux.HandleFunc("POST /api/rpc/{tool}", s.rateLimitMiddleware(s.handleRPC))
 	s.registerLegacy()
 	return s
@@ -174,4 +222,33 @@ func writeResult(w http.ResponseWriter, v any) {
 
 func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": msg})
+}
+
+func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("request_id")
+	req, ok := s.approvals.Get(id)
+	if !ok {
+		writeError(w, 404, "approval request not found or expired")
+		return
+	}
+	s.approvals.Remove(id)
+
+	var success bool
+	var msg string
+	if req.MediaPath != "" {
+		success, msg = s.deps.WA.SendMessage(req.Recipient, req.Message, req.MediaPath)
+	} else {
+		success, msg = s.deps.WA.SendMessage(req.Recipient, req.Message, "")
+	}
+	respond(w, map[string]any{"success": success, "message": msg}, nil)
+}
+
+func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("request_id")
+	if _, ok := s.approvals.Get(id); !ok {
+		writeError(w, 404, "approval request not found or expired")
+		return
+	}
+	s.approvals.Remove(id)
+	respond(w, map[string]any{"success": true, "message": "request rejected"}, nil)
 }

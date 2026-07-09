@@ -3,11 +3,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
-	"github.com/lncitador/whatsapp-mcp/internal/audio"
+	"github.com/lncitador/whatsapp-mcp/internal/config"
 	"github.com/lncitador/whatsapp-mcp/internal/store"
 )
 
@@ -38,6 +37,9 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid JSON body: "+err.Error())
 		return
 	}
+
+	go logToolCall(auditLogPath(), tool, a.Recipient, r.RemoteAddr)
+
 	switch tool {
 	case "search_contacts":
 		res, err := s.deps.Store.SearchContacts(a.Query)
@@ -46,6 +48,9 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		args := store.ListMessagesArgs{
 			SenderPhoneNumber: a.SenderPhoneNumber, ChatJID: a.ChatJID,
 			Query: a.Query, Limit: a.Limit, Page: a.Page,
+		}
+		if args.Limit > 100 {
+			args.Limit = 100
 		}
 		var err error
 		if args.After, err = parseISO(a.After); err != nil {
@@ -123,36 +128,47 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "recipient must be provided")
 			return
 		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, a.Message, "")
-		respond(w, map[string]any{"success": ok, "message": msg}, nil)
+		reqID := s.approvals.Create("send_message", a.Recipient, a.Message, "")
+		respond(w, map[string]any{
+			"success":    false,
+			"status":     "pending_approval",
+			"request_id": reqID,
+			"message":    "Send requires approval. Call /api/approve/" + reqID + " to confirm or /api/reject/" + reqID + " to cancel.",
+		}, nil)
 	case "send_file":
 		if a.Recipient == "" || a.MediaPath == "" {
 			writeError(w, 400, "recipient and media_path must be provided")
 			return
 		}
-		if _, err := os.Stat(a.MediaPath); err != nil {
-			writeError(w, 400, "media file not found: "+a.MediaPath)
+		cleanPath, err := validateMediaPath(a.MediaPath, config.BaseDir())
+		if err != nil {
+			writeError(w, 400, err.Error())
 			return
 		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, "", a.MediaPath)
-		respond(w, map[string]any{"success": ok, "message": msg}, nil)
+		reqID := s.approvals.Create("send_file", a.Recipient, "", cleanPath)
+		respond(w, map[string]any{
+			"success":    false,
+			"status":     "pending_approval",
+			"request_id": reqID,
+			"message":    "Send requires approval. Call /api/approve/" + reqID + " to confirm or /api/reject/" + reqID + " to cancel.",
+		}, nil)
 	case "send_audio_message":
 		if a.Recipient == "" || a.MediaPath == "" {
 			writeError(w, 400, "recipient and media_path must be provided")
 			return
 		}
-		path := a.MediaPath
-		if !strings.HasSuffix(path, ".ogg") {
-			converted, err := audio.ConvertToOpusOggTemp(path)
-			if err != nil {
-				writeError(w, 400, err.Error())
-				return
-			}
-			defer os.Remove(converted)
-			path = converted
+		cleanPath, err := validateMediaPath(a.MediaPath, config.BaseDir())
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
 		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, "", path)
-		respond(w, map[string]any{"success": ok, "message": msg}, nil)
+		reqID := s.approvals.Create("send_audio_message", a.Recipient, "", cleanPath)
+		respond(w, map[string]any{
+			"success":    false,
+			"status":     "pending_approval",
+			"request_id": reqID,
+			"message":    "Send requires approval. Call /api/approve/" + reqID + " to confirm or /api/reject/" + reqID + " to cancel.",
+		}, nil)
 	case "download_media":
 		path, mediaType, filename, err := s.deps.WA.DownloadMedia(a.MessageID, a.ChatJID)
 		if err != nil {
@@ -199,7 +215,7 @@ func (s *Server) formatMessage(m store.Message) string {
 	if !m.IsFromMe {
 		sender = s.deps.Store.SenderName(m.Sender)
 	}
-	return out + "From: " + sender + ": " + prefix + m.Content + "\n"
+	return out + "From: " + sender + ": " + prefix + sanitizeContent(m.Content) + "\n"
 }
 
 func (s *Server) formatMessages(msgs []store.Message) string {

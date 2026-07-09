@@ -8,7 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
 
+	"github.com/lncitador/whatsapp-mcp/internal/audio"
 	"github.com/lncitador/whatsapp-mcp/internal/store"
 	"github.com/lncitador/whatsapp-mcp/internal/wa"
 )
@@ -26,14 +31,86 @@ type Deps struct {
 	OnShutdown func()
 }
 
+type pendingRequest struct {
+	ID        string
+	Tool      string
+	Recipient string
+	Message   string
+	MediaPath string
+	CreatedAt time.Time
+}
+
+type approvalSystem struct {
+	mu       sync.Mutex
+	requests map[string]*pendingRequest
+}
+
+func newApprovalSystem() *approvalSystem {
+	return &approvalSystem{requests: make(map[string]*pendingRequest)}
+}
+
+func (a *approvalSystem) Create(tool, recipient, message, mediaPath string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	id := fmt.Sprintf("req_%d", time.Now().UnixNano())
+	a.requests[id] = &pendingRequest{
+		ID: id, Tool: tool, Recipient: recipient,
+		Message: message, MediaPath: mediaPath,
+		CreatedAt: time.Now(),
+	}
+	return id
+}
+
+func (a *approvalSystem) Get(id string) (*pendingRequest, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	r, ok := a.requests[id]
+	if !ok {
+		return nil, false
+	}
+	if time.Since(r.CreatedAt) > 5*time.Minute {
+		delete(a.requests, id)
+		return nil, false
+	}
+	return r, true
+}
+
+func (a *approvalSystem) Remove(id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.requests, id)
+}
+
+func (a *approvalSystem) GetAndRemove(id string) (*pendingRequest, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	r, ok := a.requests[id]
+	if !ok {
+		return nil, false
+	}
+	if time.Since(r.CreatedAt) > 5*time.Minute {
+		delete(a.requests, id)
+		return nil, false
+	}
+	delete(a.requests, id)
+	return r, true
+}
+
 type Server struct {
-	deps Deps
-	mux  *http.ServeMux
-	http *http.Server
+	deps      Deps
+	mux       *http.ServeMux
+	http      *http.Server
+	rateLim   *rateLimiter
+	approvals *approvalSystem
 }
 
 func New(deps Deps) *Server {
-	s := &Server{deps: deps, mux: http.NewServeMux()}
+	s := &Server{
+		deps:      deps,
+		mux:       http.NewServeMux(),
+		rateLim:   newRateLimiter(10, time.Minute),
+		approvals: newApprovalSystem(),
+	}
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true, "version": deps.Version})
 	})
@@ -46,7 +123,9 @@ func New(deps Deps) *Server {
 			go deps.OnShutdown()
 		}
 	})
-	s.mux.HandleFunc("POST /api/rpc/{tool}", s.handleRPC)
+	s.mux.HandleFunc("POST /api/approve/{request_id}", s.handleApprove)
+	s.mux.HandleFunc("POST /api/reject/{request_id}", s.handleReject)
+	s.mux.HandleFunc("POST /api/rpc/{tool}", s.rateLimitMiddleware(s.handleRPC))
 	s.registerLegacy()
 	return s
 }
@@ -66,6 +145,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	return s.http.Shutdown(ctx)
+}
+
+func (s *Server) rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tool := r.PathValue("tool")
+		if !s.rateLim.Allow(tool) {
+			writeError(w, 429, "rate limit exceeded for tool: "+tool)
+			return
+		}
+		next(w, r)
+	}
 }
 
 // Legacy struct types ported from whatsapp-bridge/main.go:193-203, 473-485.
@@ -157,4 +247,41 @@ func writeResult(w http.ResponseWriter, v any) {
 
 func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": msg})
+}
+
+func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("request_id")
+	req, ok := s.approvals.GetAndRemove(id)
+	if !ok {
+		writeError(w, 404, "approval request not found or expired")
+		return
+	}
+
+	mediaPath := req.MediaPath
+	if req.Tool == "send_audio_message" && mediaPath != "" && !strings.HasSuffix(mediaPath, ".ogg") {
+		converted, err := audio.ConvertToOpusOggTemp(mediaPath)
+		if err != nil {
+			writeError(w, 500, "audio conversion failed: "+err.Error())
+			return
+		}
+		defer os.Remove(converted)
+		mediaPath = converted
+	}
+
+	success, msg := s.deps.WA.SendMessage(req.Recipient, req.Message, mediaPath)
+	if !success {
+		writeError(w, 502, msg)
+		return
+	}
+	respond(w, map[string]any{"success": true, "message": msg}, nil)
+}
+
+func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("request_id")
+	if _, ok := s.approvals.Get(id); !ok {
+		writeError(w, 404, "approval request not found or expired")
+		return
+	}
+	s.approvals.Remove(id)
+	respond(w, map[string]any{"success": true, "message": "request rejected"}, nil)
 }

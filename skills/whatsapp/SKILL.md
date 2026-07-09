@@ -1,35 +1,44 @@
 ---
 name: whatsapp
-description: Ensures the whatsapp-mcp daemon is running before using WhatsApp MCP tools. Use when the user asks to start/check WhatsApp, or when tools fail to connect.
+description: Use before WhatsApp MCP tools when they fail to connect, or when the user asks to check/start/stop WhatsApp. Handles daemon lifecycle and QR re-authentication.
 ---
 
 # WhatsApp MCP
 
-The `whatsapp-mcp` binary self-manages: the `stdio` proxy (spawned by MCP
-clients) auto-starts the daemon. You rarely need this skill; it exists for
-diagnostics.
+The `whatsapp-mcp` binary runs as a background daemon. The `stdio` proxy
+(auto-started by MCP clients) manages the daemon lifecycle — you usually
+don't need this skill unless something is broken.
 
-## Available tools
+## When tools fail or return connection errors
 
-- `search_contacts` — search contacts by name or phone
-- `list_messages` — get messages with filters and context
-- `list_chats` — list chats
-- `get_chat` — get chat metadata by JID
-- `get_direct_chat_by_contact` — get direct chat by phone number
-- `get_contact_chats` — all chats involving a contact
-- `get_last_interaction` — most recent message with a contact
-- `get_message_context` — messages around a specific message
-- `send_message` — send a text message
-- `send_file` — send a file (image, video, document)
-- `send_audio_message` — send a voice note (non-.ogg converted via ffmpeg)
-- `download_media` — download media from a message
-- `auth_status` — check session state, shows QR when re-auth needed
+1. Check daemon status:
 
-## Diagnostics
+   ```bash
+   scripts/status.sh
+   ```
 
-- Check status: `scripts/status.sh`
-- Start explicitly: `scripts/start.sh`
-- Stop: `scripts/stop.sh`
-- Logs: `~/.whatsapp-mcp/logs/daemon.log`
-- Re-auth: run `scripts/status.sh` and have the user scan the QR, or call
-  `auth_status` which returns the QR inline.
+2. If not running, start it:
+
+   ```bash
+   scripts/start.sh
+   ```
+
+3. If `auth status: waiting_qr`, copy the QR block into your reply and tell
+   the user to scan it (Settings → Linked Devices → Link a Device). Poll
+   `status.sh` every ~10s until connected.
+
+4. If `auth status: timed_out`, the daemon will restart automatically with a
+   fresh QR — repeat step 3.
+
+## Manual control
+
+- **Start:** `scripts/start.sh`
+- **Stop:** `scripts/stop.sh`
+- **Logs:** `~/.whatsapp-mcp/logs/daemon.log`
+- **Data:** `~/.whatsapp-mcp/` (session, messages, media)
+
+## Re-authentication
+
+When the WhatsApp session expires (~20 days), call `auth_status` — it returns
+the QR inline. Or run `scripts/status.sh` and have the user scan the QR from
+the terminal output.

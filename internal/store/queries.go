@@ -82,7 +82,13 @@ func (s *Store) ListMessages(a ListMessagesArgs) ([]Message, error) {
 		where, params = append(where, "messages.chat_jid = ?"), append(params, a.ChatJID)
 	}
 	if a.Query != "" {
-		where, params = append(where, "LOWER(messages.content) LIKE LOWER(?)"), append(params, "%"+a.Query+"%")
+		if s.hasFTS {
+			q[0] = "SELECT " + messageCols + " FROM messages JOIN chats ON messages.chat_jid = chats.jid JOIN messages_fts ON messages.rowid = messages_fts.rowid"
+			where = append(where, "messages_fts MATCH ?")
+			params = append(params, `"`+a.Query+`"`)
+		} else {
+			where, params = append(where, "LOWER(messages.content) LIKE LOWER(?)"), append(params, "%"+a.Query+"%")
+		}
 	}
 	if len(where) > 0 {
 		q = append(q, "WHERE "+strings.Join(where, " AND "))

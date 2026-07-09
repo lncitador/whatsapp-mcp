@@ -14,7 +14,8 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	hasFTS bool
 }
 
 type NewMessage struct {
@@ -74,10 +75,52 @@ func Open() (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("create tables: %w", err)
 	}
-	return &Store{db: db}, nil
+
+	if err := setupFTS(db); err != nil {
+		fmt.Printf("Warning: FTS5 setup failed (search will use LIKE fallback): %v\n", err)
+	}
+
+	return &Store{db: db, hasFTS: hasFTS(db)}, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+func setupFTS(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+			content, content='messages', content_rowid='rowid',
+			tokenize='unicode61 remove_diacritics 2'
+		);
+	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`
+		CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+			INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+		END;
+		CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+			INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+		END;
+		CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+			INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+			INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+		END;
+	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')")
+	return err
+}
+
+func hasFTS(db *sql.DB) bool {
+	var name string
+	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'").Scan(&name)
+	return err == nil
+}
 
 func (s *Store) StoreChat(jid, name string, lastMessageTime time.Time) error {
 	_, err := s.db.Exec(

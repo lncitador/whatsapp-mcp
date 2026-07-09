@@ -49,6 +49,9 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			SenderPhoneNumber: a.SenderPhoneNumber, ChatJID: a.ChatJID,
 			Query: a.Query, Limit: a.Limit, Page: a.Page,
 		}
+		if args.Limit > 100 {
+			args.Limit = 100
+		}
 		var err error
 		if args.After, err = parseISO(a.After); err != nil {
 			writeError(w, 400, err.Error())

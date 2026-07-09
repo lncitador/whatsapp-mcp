@@ -134,6 +134,30 @@ func TestFormatMessageSanitizesContent(t *testing.T) {
 	}
 }
 
+func TestListMessagesLimitCap(t *testing.T) {
+	ts, _, st := newTestServer(t)
+	base := time.Now()
+	st.StoreChat("5511999999999@s.whatsapp.net", "Alice", base)
+	for i := 0; i < 200; i++ {
+		st.StoreMessage(store.NewMessage{
+			ID: fmt.Sprintf("msg%d", i), ChatJID: "5511999999999@s.whatsapp.net",
+			Sender: "5511999999999", Content: fmt.Sprintf("msg %d", i),
+			Timestamp: base.Add(time.Duration(i) * time.Minute),
+		})
+	}
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/list_messages", "application/json",
+		strings.NewReader(`{"limit":500,"include_context":false}`))
+	var body struct {
+		Result string `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	lines := strings.Split(strings.TrimSpace(body.Result), "\n")
+	if len(lines) > 100 {
+		t.Fatalf("want max 100 messages, got %d", len(lines))
+	}
+}
+
 func TestLegacySendEndpoint(t *testing.T) {
 	ts, f, _ := newTestServer(t)
 	resp, _ := http.Post(ts.URL+"/api/send", "application/json",

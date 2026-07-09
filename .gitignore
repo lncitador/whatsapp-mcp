@@ -7,3 +7,4 @@ skills/whatsapp-bridge/config.sh
 /whatsapp-mcp
 dist/
 whatsapp-bridge/store/
+__pycache__/

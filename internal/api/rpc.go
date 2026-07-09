@@ -199,7 +199,7 @@ func (s *Server) formatMessage(m store.Message) string {
 	if !m.IsFromMe {
 		sender = s.deps.Store.SenderName(m.Sender)
 	}
-	return out + "From: " + sender + ": " + prefix + m.Content + "\n"
+	return out + "From: " + sender + ": " + prefix + sanitizeContent(m.Content) + "\n"
 }
 
 func (s *Server) formatMessages(msgs []store.Message) string {

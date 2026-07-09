@@ -86,6 +86,29 @@ func TestRPCUnknownTool(t *testing.T) {
 	}
 }
 
+func TestFormatMessageSanitizesContent(t *testing.T) {
+	ts, _, st := newTestServer(t)
+	st.StoreChat("5511999999999@s.whatsapp.net", "Alice", time.Now())
+	st.StoreMessage(store.NewMessage{
+		ID: "san1", ChatJID: "5511999999999@s.whatsapp.net",
+		Sender: "5511999999999", Content: "hello\u200Bworld\u202Emalicious",
+		Timestamp: time.Now(), IsFromMe: false,
+	})
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/list_messages", "application/json",
+		strings.NewReader(`{"query":"hello","limit":1}`))
+	var body struct {
+		Result string `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if strings.Contains(body.Result, "\u200B") || strings.Contains(body.Result, "\u202E") {
+		t.Fatalf("content not sanitized: %q", body.Result)
+	}
+	if !strings.Contains(body.Result, "helloworldmalicious") {
+		t.Fatalf("sanitized content missing: %q", body.Result)
+	}
+}
+
 func TestLegacySendEndpoint(t *testing.T) {
 	ts, f, _ := newTestServer(t)
 	resp, _ := http.Post(ts.URL+"/api/send", "application/json",

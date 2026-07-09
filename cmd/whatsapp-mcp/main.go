@@ -20,14 +20,20 @@ func main() {
 			os.Exit(1)
 		}
 	case "stdio":
-		fmt.Fprintln(os.Stderr, "stdio: not implemented yet")
-		os.Exit(1)
+		if err := runStdio(version); err != nil {
+			fmt.Fprintln(os.Stderr, "stdio:", err)
+			os.Exit(1)
+		}
 	case "status":
-		fmt.Fprintln(os.Stderr, "status: not implemented yet")
-		os.Exit(1)
+		if err := runStatus(); err != nil {
+			fmt.Fprintln(os.Stderr, "status:", err)
+			os.Exit(1)
+		}
 	case "stop":
-		fmt.Fprintln(os.Stderr, "stop: not implemented yet")
-		os.Exit(1)
+		if err := runStop(); err != nil {
+			fmt.Fprintln(os.Stderr, "stop:", err)
+			os.Exit(1)
+		}
 	case "--version", "version":
 		fmt.Println("whatsapp-mcp", version)
 	default:

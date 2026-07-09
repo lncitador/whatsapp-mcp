@@ -3,11 +3,9 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
-	"github.com/lncitador/whatsapp-mcp/internal/audio"
 	"github.com/lncitador/whatsapp-mcp/internal/config"
 	"github.com/lncitador/whatsapp-mcp/internal/store"
 )
@@ -161,17 +159,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, err.Error())
 			return
 		}
-		path := cleanPath
-		if !strings.HasSuffix(path, ".ogg") {
-			converted, err := audio.ConvertToOpusOggTemp(path)
-			if err != nil {
-				writeError(w, 400, err.Error())
-				return
-			}
-			defer os.Remove(converted)
-			path = converted
-		}
-		reqID := s.approvals.Create("send_audio_message", a.Recipient, "", path)
+		reqID := s.approvals.Create("send_audio_message", a.Recipient, "", cleanPath)
 		respond(w, map[string]any{
 			"success":    false,
 			"status":     "pending_approval",

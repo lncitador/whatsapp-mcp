@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/lncitador/whatsapp-mcp/internal/audio"
 	"github.com/lncitador/whatsapp-mcp/internal/store"
 	"github.com/lncitador/whatsapp-mcp/internal/wa"
 )
@@ -62,7 +65,14 @@ func (a *approvalSystem) Get(id string) (*pendingRequest, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	r, ok := a.requests[id]
-	return r, ok
+	if !ok {
+		return nil, false
+	}
+	if time.Since(r.CreatedAt) > 5*time.Minute {
+		delete(a.requests, id)
+		return nil, false
+	}
+	return r, true
 }
 
 func (a *approvalSystem) Remove(id string) {
@@ -231,16 +241,25 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "approval request not found or expired")
 		return
 	}
-	s.approvals.Remove(id)
 
-	var success bool
-	var msg string
-	if req.MediaPath != "" {
-		success, msg = s.deps.WA.SendMessage(req.Recipient, req.Message, req.MediaPath)
-	} else {
-		success, msg = s.deps.WA.SendMessage(req.Recipient, req.Message, "")
+	mediaPath := req.MediaPath
+	if req.Tool == "send_audio_message" && mediaPath != "" && !strings.HasSuffix(mediaPath, ".ogg") {
+		converted, err := audio.ConvertToOpusOggTemp(mediaPath)
+		if err != nil {
+			writeError(w, 500, "audio conversion failed: "+err.Error())
+			return
+		}
+		defer os.Remove(converted)
+		mediaPath = converted
 	}
-	respond(w, map[string]any{"success": success, "message": msg}, nil)
+
+	success, msg := s.deps.WA.SendMessage(req.Recipient, req.Message, mediaPath)
+	if !success {
+		writeError(w, 502, msg)
+		return
+	}
+	s.approvals.Remove(id)
+	respond(w, map[string]any{"success": true, "message": msg}, nil)
 }
 
 func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {

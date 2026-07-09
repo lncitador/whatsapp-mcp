@@ -342,3 +342,18 @@ func TestRejectNotFound(t *testing.T) {
 		t.Fatalf("want 404, got %d", resp.StatusCode)
 	}
 }
+
+func TestApprovalExpiresAfterTTL(t *testing.T) {
+	a := newApprovalSystem()
+	id := a.Create("send_message", "5511999999999", "hello", "")
+	req, ok := a.Get(id)
+	if !ok || req == nil {
+		t.Fatal("expected request to exist immediately after creation")
+	}
+	req.CreatedAt = time.Now().Add(-6 * time.Minute)
+	a.requests[id] = req
+	_, ok = a.Get(id)
+	if ok {
+		t.Fatal("expected expired request to be gone")
+	}
+}

@@ -57,3 +57,43 @@ func TestEnsureDirs(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateMediaPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"empty path", "", true},
+		{"relative traversal", "../../../etc/passwd", true},
+		{"absolute traversal", "/tmp/../../../etc/passwd", true},
+		{"dot-dot in middle", "/tmp/foo/../bar", true},
+		{"valid absolute path", "/tmp/test.jpg", false},
+		{"valid relative path", "test.jpg", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateMediaPath(tt.path)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateMediaPath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateMediaPathWithRoots(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WHATSAPP_MEDIA_ROOTS", dir)
+
+	allowed := filepath.Join(dir, "test.jpg")
+	os.WriteFile(allowed, []byte("test"), 0644)
+	if err := ValidateMediaPath(allowed); err != nil {
+		t.Errorf("ValidateMediaPath(%q) should be allowed: %v", allowed, err)
+	}
+
+	denied := "/etc/passwd"
+	if err := ValidateMediaPath(denied); err == nil {
+		t.Errorf("ValidateMediaPath(%q) should be denied", denied)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lncitador/whatsapp-mcp/internal/audio"
+	"github.com/lncitador/whatsapp-mcp/internal/config"
 	"github.com/lncitador/whatsapp-mcp/internal/store"
 )
 
@@ -29,6 +30,8 @@ type rpcArgs struct {
 	Recipient          string `json:"recipient"`
 	Message            string `json:"message"`
 	MediaPath          string `json:"media_path"`
+	ReplyToMessageID   string `json:"reply_to_message_id"`
+	ReplyToSenderJID   string `json:"reply_to_sender_jid"`
 }
 
 func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +85,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			}
 			msgs = expanded
 		}
-		respond(w, s.formatMessages(msgs), nil)
+		respond(w, s.formatMessages(s.enrichMessages(msgs)), nil)
 	case "list_chats":
 		ilm := a.IncludeLastMessage == nil || *a.IncludeLastMessage
 		sortBy := a.SortBy
@@ -90,17 +93,41 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			sortBy = "last_active"
 		}
 		res, err := s.deps.Store.ListChats(a.Query, a.Limit, a.Page, ilm, sortBy)
-		respond(w, res, err)
+		if err != nil {
+			respond(w, nil, err)
+			return
+		}
+		respond(w, s.enrichChats(res), nil)
 	case "get_chat":
 		ilm := a.IncludeLastMessage == nil || *a.IncludeLastMessage
 		res, err := s.deps.Store.GetChat(a.ChatJID, ilm)
-		respond(w, res, err)
+		if err != nil {
+			respond(w, nil, err)
+			return
+		}
+		if res != nil {
+			respond(w, s.enrichChat(*res), nil)
+		} else {
+			respond(w, nil, nil)
+		}
 	case "get_direct_chat_by_contact":
 		res, err := s.deps.Store.GetDirectChatByContact(a.SenderPhoneNumber)
-		respond(w, res, err)
+		if err != nil {
+			respond(w, nil, err)
+			return
+		}
+		if res != nil {
+			respond(w, s.enrichChat(*res), nil)
+		} else {
+			respond(w, nil, nil)
+		}
 	case "get_contact_chats":
 		res, err := s.deps.Store.GetContactChats(a.JID, a.Limit, a.Page)
-		respond(w, res, err)
+		if err != nil {
+			respond(w, nil, err)
+			return
+		}
+		respond(w, s.enrichChats(res), nil)
 	case "get_last_interaction":
 		m, err := s.deps.Store.GetLastInteraction(a.JID)
 		if err != nil || m == nil {
@@ -123,22 +150,30 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "recipient must be provided")
 			return
 		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, a.Message, "")
+		ok, msg := s.deps.WA.SendMessage(a.Recipient, a.Message, "", a.ReplyToMessageID, a.ReplyToSenderJID)
 		respond(w, map[string]any{"success": ok, "message": msg}, nil)
 	case "send_file":
 		if a.Recipient == "" || a.MediaPath == "" {
 			writeError(w, 400, "recipient and media_path must be provided")
 			return
 		}
+		if err := config.ValidateMediaPath(a.MediaPath); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
 		if _, err := os.Stat(a.MediaPath); err != nil {
 			writeError(w, 400, "media file not found: "+a.MediaPath)
 			return
 		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, "", a.MediaPath)
+		ok, msg := s.deps.WA.SendMessage(a.Recipient, "", a.MediaPath, a.ReplyToMessageID, a.ReplyToSenderJID)
 		respond(w, map[string]any{"success": ok, "message": msg}, nil)
 	case "send_audio_message":
 		if a.Recipient == "" || a.MediaPath == "" {
 			writeError(w, 400, "recipient and media_path must be provided")
+			return
+		}
+		if err := config.ValidateMediaPath(a.MediaPath); err != nil {
+			writeError(w, 400, err.Error())
 			return
 		}
 		path := a.MediaPath
@@ -151,7 +186,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			defer os.Remove(converted)
 			path = converted
 		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, "", path)
+		ok, msg := s.deps.WA.SendMessage(a.Recipient, "", path, a.ReplyToMessageID, a.ReplyToSenderJID)
 		respond(w, map[string]any{"success": ok, "message": msg}, nil)
 	case "download_media":
 		path, mediaType, filename, err := s.deps.WA.DownloadMedia(a.MessageID, a.ChatJID)
@@ -197,9 +232,36 @@ func (s *Server) formatMessage(m store.Message) string {
 	}
 	sender := "Me"
 	if !m.IsFromMe {
-		sender = s.deps.Store.SenderName(m.Sender)
+		if m.SenderName != "" {
+			sender = m.SenderName
+		} else {
+			sender = s.deps.Store.SenderName(m.Sender)
+		}
 	}
 	return out + "From: " + sender + ": " + prefix + m.Content + "\n"
+}
+
+func (s *Server) enrichMessages(msgs []store.Message) []store.Message {
+	for i := range msgs {
+		if !msgs[i].IsFromMe && msgs[i].SenderName == "" {
+			msgs[i].SenderName = s.deps.Store.SenderName(msgs[i].Sender)
+		}
+	}
+	return msgs
+}
+
+func (s *Server) enrichChat(c store.Chat) store.Chat {
+	if c.LastSender != "" && !c.LastIsFromMe && c.LastSenderName == "" {
+		c.LastSenderName = s.deps.Store.SenderName(c.LastSender)
+	}
+	return c
+}
+
+func (s *Server) enrichChats(chats []store.Chat) []store.Chat {
+	for i := range chats {
+		chats[i] = s.enrichChat(chats[i])
+	}
+	return chats
 }
 
 func (s *Server) formatMessages(msgs []store.Message) string {

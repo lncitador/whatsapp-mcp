@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 func BaseDir() string {
@@ -57,4 +58,47 @@ func EnsureDirs() error {
 		}
 	}
 	return nil
+}
+
+// ValidateMediaPath validates that a media path is safe to read/write.
+// It prevents CWE-22 path traversal attacks.
+//
+// Rules:
+//   - Path must not contain ".." (prevents directory traversal)
+//   - If WHATSAPP_MEDIA_ROOTS is set, path must be under one of those roots
+//   - Symlinks are resolved before checking (prevents symlink escape)
+func ValidateMediaPath(mediaPath string) error {
+	if mediaPath == "" {
+		return fmt.Errorf("media_path is empty")
+	}
+
+	if strings.Contains(mediaPath, "..") {
+		return fmt.Errorf("media_path must not contain \"..\"")
+	}
+
+	roots := os.Getenv("WHATSAPP_MEDIA_ROOTS")
+	if roots == "" {
+		return nil
+	}
+
+	cleaned, err := filepath.EvalSymlinks(mediaPath)
+	if err != nil {
+		return fmt.Errorf("cannot resolve media_path: %w", err)
+	}
+
+	for _, root := range filepath.SplitList(roots) {
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		resolvedRoot, err := filepath.EvalSymlinks(absRoot)
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(cleaned, resolvedRoot+string(filepath.Separator)) || cleaned == resolvedRoot {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("media_path %q is outside allowed media roots", mediaPath)
 }

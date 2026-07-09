@@ -9,13 +9,14 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/lncitador/whatsapp-mcp/internal/config"
 	"github.com/lncitador/whatsapp-mcp/internal/store"
 	"github.com/lncitador/whatsapp-mcp/internal/wa"
 )
 
 type WA interface {
 	Status() wa.Status
-	SendMessage(recipient, message, mediaPath string) (bool, string)
+	SendMessage(recipient, message, mediaPath, replyToMessageID, replyToSenderJID string) (bool, string)
 	DownloadMedia(messageID, chatJID string) (path, mediaType, filename string, err error)
 }
 
@@ -108,7 +109,13 @@ func (s *Server) registerLegacy() {
 			http.Error(w, "Message or media path is required", http.StatusBadRequest)
 			return
 		}
-		success, message := s.deps.WA.SendMessage(req.Recipient, req.Message, req.MediaPath)
+		if req.MediaPath != "" {
+			if err := config.ValidateMediaPath(req.MediaPath); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		success, message := s.deps.WA.SendMessage(req.Recipient, req.Message, req.MediaPath, "", "")
 		w.Header().Set("Content-Type", "application/json")
 		if !success {
 			w.WriteHeader(http.StatusInternalServerError)

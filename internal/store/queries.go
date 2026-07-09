@@ -8,23 +8,25 @@ import (
 )
 
 type Message struct {
-	Timestamp time.Time `json:"timestamp"`
-	Sender    string    `json:"sender"`
-	ChatName  string    `json:"chat_name,omitempty"`
-	Content   string    `json:"content"`
-	IsFromMe  bool      `json:"is_from_me"`
-	ChatJID   string    `json:"chat_jid"`
-	ID        string    `json:"id"`
-	MediaType string    `json:"media_type,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
+	Sender     string    `json:"sender"`
+	SenderName string    `json:"sender_name,omitempty"`
+	ChatName   string    `json:"chat_name,omitempty"`
+	Content    string    `json:"content"`
+	IsFromMe   bool      `json:"is_from_me"`
+	ChatJID    string    `json:"chat_jid"`
+	ID         string    `json:"id"`
+	MediaType  string    `json:"media_type,omitempty"`
 }
 
 type Chat struct {
-	JID             string     `json:"jid"`
-	Name            string     `json:"name,omitempty"`
-	LastMessageTime *time.Time `json:"last_message_time,omitempty"`
-	LastMessage     string     `json:"last_message,omitempty"`
-	LastSender      string     `json:"last_sender,omitempty"`
-	LastIsFromMe    bool       `json:"last_is_from_me,omitempty"`
+	JID              string     `json:"jid"`
+	Name             string     `json:"name,omitempty"`
+	LastMessageTime  *time.Time `json:"last_message_time,omitempty"`
+	LastMessage      string     `json:"last_message,omitempty"`
+	LastSender       string     `json:"last_sender,omitempty"`
+	LastSenderName   string     `json:"last_sender_name,omitempty"`
+	LastIsFromMe     bool       `json:"last_is_from_me,omitempty"`
 }
 
 type MessageContext struct {
@@ -57,6 +59,12 @@ func scanMessage(rows interface{ Scan(...any) error }) (Message, error) {
 func (s *Store) ListMessages(a ListMessagesArgs) ([]Message, error) {
 	if a.Limit <= 0 {
 		a.Limit = 20
+	}
+	if a.Limit > 100 {
+		a.Limit = 100
+	}
+	if a.Page < 0 {
+		a.Page = 0
 	}
 	q := []string{"SELECT " + messageCols + " FROM messages JOIN chats ON messages.chat_jid = chats.jid"}
 	var where []string
@@ -161,6 +169,12 @@ func (s *Store) ListChats(query string, limit, page int, includeLastMessage bool
 	if limit <= 0 {
 		limit = 20
 	}
+	if limit > 100 {
+		limit = 100
+	}
+	if page < 0 {
+		page = 0
+	}
 	q := "SELECT " + chatCols + " FROM chats c"
 	if includeLastMessage {
 		q += chatLastMsgJoin
@@ -230,6 +244,12 @@ func (s *Store) GetDirectChatByContact(phone string) (*Chat, error) {
 func (s *Store) GetContactChats(jid string, limit, page int) ([]Chat, error) {
 	if limit <= 0 {
 		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if page < 0 {
+		page = 0
 	}
 	rows, err := s.db.Query(
 		`SELECT DISTINCT c.jid, IFNULL(c.name,''), c.last_message_time,

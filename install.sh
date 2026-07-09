@@ -40,7 +40,6 @@ else
   sudo install -m 0755 "$tmp/whatsapp-mcp" "$dest/whatsapp-mcp"
 fi
 
-echo ""
 echo "installed: $dest/whatsapp-mcp ($("$dest/whatsapp-mcp" --version))"
 case ":$PATH:" in
   *":$dest:"*) ;;
@@ -51,10 +50,7 @@ esac
 # PromptScript does not support global skill installation — this is expected.
 if command -v npx >/dev/null 2>&1; then
   echo "installing agent skill..."
-  npx -y skills@latest add "https://github.com/$REPO" --skill whatsapp --global -y 2>&1 | \
-    grep -v "PromptScript" || true
-else
-  echo "NOTE: npx not found. Install the skill manually: npx skills@latest add https://github.com/$REPO --skill whatsapp --global"
+  npx -y skills@latest add "https://github.com/$REPO" --skill whatsapp --global -y >/dev/null 2>&1 || true
 fi
 
 echo ""

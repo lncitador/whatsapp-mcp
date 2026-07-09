@@ -39,6 +39,9 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid JSON body: "+err.Error())
 		return
 	}
+
+	go logToolCall(auditLogPath(), tool, a.Recipient, r.RemoteAddr)
+
 	switch tool {
 	case "search_contacts":
 		res, err := s.deps.Store.SearchContacts(a.Query)

@@ -50,10 +50,10 @@ esac
 # Install the agent skill globally via npx skills
 if command -v npx >/dev/null 2>&1; then
   echo "installing agent skill..."
-  npx -y skills@latest add "https://github.com/$REPO" --skill whatsapp-bridge --global -y 2>/dev/null || \
-    echo "NOTE: skill install skipped (npx failed). Install manually: npx skills@latest add https://github.com/$REPO --skill whatsapp-bridge --global"
+  npx -y skills@latest add "https://github.com/$REPO" --skill whatsapp --global -y 2>/dev/null || \
+    echo "NOTE: skill install skipped (npx failed). Install manually: npx skills@latest add https://github.com/$REPO --skill whatsapp --global"
 else
-  echo "NOTE: npx not found. Install the skill manually: npx skills@latest add https://github.com/$REPO --skill whatsapp-bridge --global"
+  echo "NOTE: npx not found. Install the skill manually: npx skills@latest add https://github.com/$REPO --skill whatsapp --global"
 fi
 
 echo ""

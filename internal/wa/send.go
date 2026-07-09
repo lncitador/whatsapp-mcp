@@ -14,7 +14,7 @@ import (
 	"github.com/lncitador/whatsapp-mcp/internal/audio"
 )
 
-func (c *Client) SendMessage(recipient, message, mediaPath string) (bool, string) {
+func (c *Client) SendMessage(recipient, message, mediaPath, replyToMessageID, replyToSenderJID string) (bool, string) {
 	if !c.wm.IsConnected() {
 		return false, "Not connected to WhatsApp"
 	}
@@ -23,7 +23,6 @@ func (c *Client) SendMessage(recipient, message, mediaPath string) (bool, string
 	var err error
 
 	isJID := strings.Contains(recipient, "@")
-
 	if isJID {
 		recipientJID, err = types.ParseJID(recipient)
 		if err != nil {
@@ -37,6 +36,16 @@ func (c *Client) SendMessage(recipient, message, mediaPath string) (bool, string
 	}
 
 	msg := &waProto.Message{}
+	var contextInfo *waProto.ContextInfo
+
+	if replyToMessageID != "" {
+		contextInfo = &waProto.ContextInfo{
+			StanzaID: &replyToMessageID,
+		}
+		if replyToSenderJID != "" {
+			contextInfo.Participant = &replyToSenderJID
+		}
+	}
 
 	if mediaPath != "" {
 		mediaData, err := os.ReadFile(mediaPath)
@@ -96,6 +105,7 @@ func (c *Client) SendMessage(recipient, message, mediaPath string) (bool, string
 				FileEncSHA256: resp.FileEncSHA256,
 				FileSHA256:    resp.FileSHA256,
 				FileLength:    &resp.FileLength,
+				ContextInfo:   contextInfo,
 			}
 		case whatsmeow.MediaAudio:
 			var seconds uint32 = 30
@@ -124,6 +134,7 @@ func (c *Client) SendMessage(recipient, message, mediaPath string) (bool, string
 				Seconds:       proto.Uint32(seconds),
 				PTT:           proto.Bool(true),
 				Waveform:      waveform,
+				ContextInfo:   contextInfo,
 			}
 		case whatsmeow.MediaVideo:
 			msg.VideoMessage = &waProto.VideoMessage{
@@ -135,6 +146,7 @@ func (c *Client) SendMessage(recipient, message, mediaPath string) (bool, string
 				FileEncSHA256: resp.FileEncSHA256,
 				FileSHA256:    resp.FileSHA256,
 				FileLength:    &resp.FileLength,
+				ContextInfo:   contextInfo,
 			}
 		case whatsmeow.MediaDocument:
 			msg.DocumentMessage = &waProto.DocumentMessage{
@@ -147,10 +159,18 @@ func (c *Client) SendMessage(recipient, message, mediaPath string) (bool, string
 				FileEncSHA256: resp.FileEncSHA256,
 				FileSHA256:    resp.FileSHA256,
 				FileLength:    &resp.FileLength,
+				ContextInfo:   contextInfo,
 			}
 		}
 	} else {
-		msg.Conversation = proto.String(message)
+		if contextInfo != nil {
+			msg.ExtendedTextMessage = &waProto.ExtendedTextMessage{
+				Text:        proto.String(message),
+				ContextInfo: contextInfo,
+			}
+		} else {
+			msg.Conversation = proto.String(message)
+		}
 	}
 
 	_, err = c.wm.SendMessage(context.Background(), recipientJID, msg)

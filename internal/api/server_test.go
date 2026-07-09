@@ -12,11 +12,11 @@ import (
 	"github.com/lncitador/whatsapp-mcp/internal/wa"
 )
 
-type fakeWA struct{ sent [][3]string }
+type fakeWA struct{ sent [][5]string }
 
 func (f *fakeWA) Status() wa.Status { return wa.Status{State: wa.AuthConnected} }
-func (f *fakeWA) SendMessage(r, m, p string) (bool, string) {
-	f.sent = append(f.sent, [3]string{r, m, p})
+func (f *fakeWA) SendMessage(r, m, p, replyToID, replyToSender string) (bool, string) {
+	f.sent = append(f.sent, [5]string{r, m, p, replyToID, replyToSender})
 	return true, "Message sent to " + r
 }
 func (f *fakeWA) DownloadMedia(id, jid string) (string, string, string, error) {

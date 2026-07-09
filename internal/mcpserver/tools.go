@@ -67,8 +67,10 @@ type messageContextIn struct {
 }
 
 type sendMessageIn struct {
-	Recipient string `json:"recipient" jsonschema:"phone number with country code (no +) or JID"`
-	Message   string `json:"message" jsonschema:"the message text to send"`
+	Recipient        string `json:"recipient" jsonschema:"phone number with country code (no +) or JID"`
+	Message          string `json:"message" jsonschema:"the message text to send"`
+	ReplyToMessageID string `json:"reply_to_message_id,omitempty" jsonschema:"message ID to quote/reply to (from list_messages or get_message_context)"`
+	ReplyToSenderJID string `json:"reply_to_sender_jid,omitempty" jsonschema:"original sender JID (required for group replies, optional for direct chats)"`
 }
 
 type sendFileIn struct {
@@ -107,7 +109,7 @@ func registerTools(s *mcp.Server, baseURL string) {
 		Description: "Get the messages around a specific message."},
 		forward[messageContextIn](baseURL, "get_message_context"))
 	mcp.AddTool(s, &mcp.Tool{Name: "send_message",
-		Description: "Send a WhatsApp text message to a person or group."},
+		Description: "Send a WhatsApp text message to a person or group. Optionally reply to a specific message using reply_to_message_id (obtainable from list_messages or get_message_context). For group replies, also provide reply_to_sender_jid."},
 		forward[sendMessageIn](baseURL, "send_message"))
 	mcp.AddTool(s, &mcp.Tool{Name: "send_file",
 		Description: "Send a file (image, video, document, raw audio) via WhatsApp."},

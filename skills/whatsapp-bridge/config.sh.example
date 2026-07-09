@@ -1,9 +1,0 @@
-# Only needed if this skill was installed at GLOBAL scope (e.g. via
-# `npx skills add . -g`), where it no longer lives next to the whatsapp-mcp
-# checkout and auto-detection in lib.sh can't find it.
-#
-# Copy this file to config.sh (next to it, gitignored) and set the path:
-#
-#   cp config.sh.example config.sh
-#
-export WHATSAPP_MCP_REPO="/path/to/whatsapp-mcp"

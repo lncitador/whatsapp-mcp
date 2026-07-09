@@ -4,6 +4,6 @@ whatsapp.log
 skills/whatsapp-bridge/.state/
 skills/whatsapp-bridge/config.sh
 .DS_Store
-whatsapp-bridge/store/
 /whatsapp-mcp
 dist/
+whatsapp-bridge/store/

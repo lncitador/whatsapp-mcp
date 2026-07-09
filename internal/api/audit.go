@@ -1,10 +1,9 @@
 package api
 
 import (
-	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/lncitador/whatsapp-mcp/internal/config"
 )
@@ -19,10 +18,10 @@ func logToolCall(logPath, tool, recipient, ip string) {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "%s | %s | %s | %s\n",
-		time.Now().UTC().Format(time.RFC3339),
-		tool,
-		recipient,
-		ip,
+	logger := slog.New(slog.NewTextHandler(f, nil))
+	logger.Info("tool invocation",
+		slog.String("tool", tool),
+		slog.String("recipient", recipient),
+		slog.String("ip", ip),
 	)
 }

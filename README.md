@@ -46,6 +46,22 @@ Here's an example of what you can do when it's connected to Claude.
 
    After approximately 20 days, you will might need to re-authenticate.
 
+   **Don't want to keep this terminal open manually?** This repo ships a
+   `whatsapp-bridge` agent skill (`skills/whatsapp-bridge/`) that runs the
+   bridge in a background `tmux` session with a watchdog that restarts it if
+   it crashes, and knows how to surface the QR code for you when
+   re-authentication is needed. If you're using a coding agent (Claude Code,
+   Cursor, Codex, ...), paste this into it:
+
+   > Install the `whatsapp-bridge` skill from this repo using the
+   > [vercel-labs/skills](https://github.com/vercel-labs/skills) CLI: from the
+   > repo root run `npx skills add . --skill whatsapp-bridge -y` (pick the
+   > agent/scope you want if prompted). Then follow the installed skill's
+   > `SKILL.md` to bring the bridge up with `scripts/start.sh`, check
+   > `scripts/status.sh`, and handle the QR code if one is waiting.
+
+   See `skills/whatsapp-bridge/SKILL.md` for details.
+
 3. **Connect to the MCP server**
 
    Copy the below json with the appropriate {{PATH}} values:

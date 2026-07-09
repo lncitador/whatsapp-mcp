@@ -1,0 +1,160 @@
+// Package api is the daemon's local HTTP surface: health/status, a generic
+// tool-RPC endpoint consumed by the MCP stdio proxy, and the legacy
+// /api/send + /api/download routes for backwards compatibility.
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	"github.com/lncitador/whatsapp-mcp/internal/store"
+	"github.com/lncitador/whatsapp-mcp/internal/wa"
+)
+
+type WA interface {
+	Status() wa.Status
+	SendMessage(recipient, message, mediaPath string) (bool, string)
+	DownloadMedia(messageID, chatJID string) (path, mediaType, filename string, err error)
+}
+
+type Deps struct {
+	Store      *store.Store
+	WA         WA
+	Version    string
+	OnShutdown func()
+}
+
+type Server struct {
+	deps Deps
+	mux  *http.ServeMux
+	http *http.Server
+}
+
+func New(deps Deps) *Server {
+	s := &Server{deps: deps, mux: http.NewServeMux()}
+	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"ok": true, "version": deps.Version})
+	})
+	s.mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, deps.WA.Status())
+	})
+	s.mux.HandleFunc("POST /shutdown", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"ok": true})
+		if deps.OnShutdown != nil {
+			go deps.OnShutdown()
+		}
+	})
+	s.mux.HandleFunc("POST /api/rpc/{tool}", s.handleRPC)
+	s.registerLegacy()
+	return s
+}
+
+func (s *Server) Handler() http.Handler { return s.mux }
+
+func (s *Server) ListenAndServe(port int) error {
+	s.http = &http.Server{
+		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
+		Handler: s.mux,
+	}
+	return s.http.ListenAndServe()
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.http == nil {
+		return nil
+	}
+	return s.http.Shutdown(ctx)
+}
+
+// Legacy struct types ported from whatsapp-bridge/main.go:193-203, 473-485.
+
+type SendMessageRequest struct {
+	Recipient string `json:"recipient"`
+	Message   string `json:"message"`
+	MediaPath string `json:"media_path,omitempty"`
+}
+
+type SendMessageResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+type DownloadMediaRequest struct {
+	MessageID string `json:"message_id"`
+	ChatJID   string `json:"chat_jid"`
+}
+
+type DownloadMediaResponse struct {
+	Success  bool   `json:"success"`
+	Message  string `json:"message"`
+	Filename string `json:"filename,omitempty"`
+	Path     string `json:"path,omitempty"`
+}
+
+func (s *Server) registerLegacy() {
+	s.mux.HandleFunc("POST /api/send", func(w http.ResponseWriter, r *http.Request) {
+		var req SendMessageRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request format", http.StatusBadRequest)
+			return
+		}
+		if req.Recipient == "" {
+			http.Error(w, "Recipient is required", http.StatusBadRequest)
+			return
+		}
+		if req.Message == "" && req.MediaPath == "" {
+			http.Error(w, "Message or media path is required", http.StatusBadRequest)
+			return
+		}
+		success, message := s.deps.WA.SendMessage(req.Recipient, req.Message, req.MediaPath)
+		w.Header().Set("Content-Type", "application/json")
+		if !success {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		json.NewEncoder(w).Encode(SendMessageResponse{Success: success, Message: message})
+	})
+
+	s.mux.HandleFunc("POST /api/download", func(w http.ResponseWriter, r *http.Request) {
+		var req DownloadMediaRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request format", http.StatusBadRequest)
+			return
+		}
+		if req.MessageID == "" || req.ChatJID == "" {
+			http.Error(w, "Message ID and Chat JID are required", http.StatusBadRequest)
+			return
+		}
+		path, mediaType, filename, err := s.deps.WA.DownloadMedia(req.MessageID, req.ChatJID)
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(DownloadMediaResponse{
+				Success: false,
+				Message: fmt.Sprintf("Failed to download media: %s", err.Error()),
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(DownloadMediaResponse{
+			Success:  true,
+			Message:  fmt.Sprintf("Successfully downloaded %s media", mediaType),
+			Filename: filename,
+			Path:     path,
+		})
+	})
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeResult(w http.ResponseWriter, v any) {
+	writeJSON(w, 200, map[string]any{"result": v})
+}
+
+func writeError(w http.ResponseWriter, code int, msg string) {
+	writeJSON(w, code, map[string]any{"error": msg})
+}

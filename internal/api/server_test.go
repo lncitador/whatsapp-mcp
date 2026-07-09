@@ -2,8 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -115,5 +118,55 @@ func TestLegacySendEndpoint(t *testing.T) {
 		strings.NewReader(`{"recipient":"x","message":"legacy"}`))
 	if resp.StatusCode != 200 || len(f.sent) != 1 {
 		t.Fatalf("legacy send failed: %d", resp.StatusCode)
+	}
+}
+
+func TestSendFileRejectsPathTraversal(t *testing.T) {
+	ts, f, _ := newTestServer(t)
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "secret.txt")
+	os.WriteFile(outsideFile, []byte("secret"), 0644)
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_file", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"recipient":"5511999999999","media_path":"%s"}`, outsideFile)))
+	if resp.StatusCode != 400 {
+		t.Fatalf("want 400, got %d", resp.StatusCode)
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("message should not have been sent: %v", f.sent)
+	}
+}
+
+func TestSendFileAcceptsValidPath(t *testing.T) {
+	ts, f, _ := newTestServer(t)
+	dir := os.Getenv("WHATSAPP_MCP_DIR")
+	mediaDir := filepath.Join(dir, "media")
+	os.MkdirAll(mediaDir, 0755)
+	photo := filepath.Join(mediaDir, "photo.jpg")
+	os.WriteFile(photo, []byte("fake"), 0644)
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_file", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"recipient":"5511999999999","media_path":"%s"}`, photo)))
+	if resp.StatusCode != 200 {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if len(f.sent) != 1 {
+		t.Fatalf("want 1 sent, got %d", len(f.sent))
+	}
+}
+
+func TestSendAudioRejectsPathTraversal(t *testing.T) {
+	ts, f, _ := newTestServer(t)
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "secret.ogg")
+	os.WriteFile(outsideFile, []byte("secret"), 0644)
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_audio_message", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"recipient":"5511999999999","media_path":"%s"}`, outsideFile)))
+	if resp.StatusCode != 400 {
+		t.Fatalf("want 400, got %d", resp.StatusCode)
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("message should not have been sent: %v", f.sent)
 	}
 }

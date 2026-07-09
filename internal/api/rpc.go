@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lncitador/whatsapp-mcp/internal/audio"
+	"github.com/lncitador/whatsapp-mcp/internal/config"
 	"github.com/lncitador/whatsapp-mcp/internal/store"
 )
 
@@ -130,18 +131,24 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "recipient and media_path must be provided")
 			return
 		}
-		if _, err := os.Stat(a.MediaPath); err != nil {
-			writeError(w, 400, "media file not found: "+a.MediaPath)
+		cleanPath, err := validateMediaPath(a.MediaPath, config.BaseDir())
+		if err != nil {
+			writeError(w, 400, err.Error())
 			return
 		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, "", a.MediaPath)
+		ok, msg := s.deps.WA.SendMessage(a.Recipient, "", cleanPath)
 		respond(w, map[string]any{"success": ok, "message": msg}, nil)
 	case "send_audio_message":
 		if a.Recipient == "" || a.MediaPath == "" {
 			writeError(w, 400, "recipient and media_path must be provided")
 			return
 		}
-		path := a.MediaPath
+		cleanPath, err := validateMediaPath(a.MediaPath, config.BaseDir())
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		path := cleanPath
 		if !strings.HasSuffix(path, ".ogg") {
 			converted, err := audio.ConvertToOpusOggTemp(path)
 			if err != nil {

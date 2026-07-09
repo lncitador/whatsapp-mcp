@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	waProto "go.mau.fi/whatsmeow/binary/proto"
@@ -55,6 +56,12 @@ func extractMediaInfo(msg *waProto.Message) (mediaType, filename, url string, me
 func (c *Client) handleMessage(msg *events.Message) {
 	chatJID := msg.Info.Chat.String()
 	sender := msg.Info.Sender.User
+
+	chatJID = c.resolveToPN(chatJID)
+	senderJID := c.resolveToPN(msg.Info.Sender.String())
+	if i := strings.Index(senderJID, "@"); i >= 0 {
+		sender = senderJID[:i]
+	}
 
 	name := c.chatName(msg.Info.Chat, chatJID, nil, sender)
 
@@ -164,6 +171,7 @@ func (c *Client) handleHistorySync(hs *events.HistorySync) {
 		}
 
 		chatJID := *conversation.ID
+		chatJID = c.resolveToPN(chatJID)
 
 		jid, err := types.ParseJID(chatJID)
 		if err != nil {
@@ -278,4 +286,19 @@ func (c *Client) handleHistorySync(hs *events.HistorySync) {
 	}
 
 	c.logger.Infof("History sync complete. Stored %d messages.", syncedCount)
+}
+
+func (c *Client) resolveToPN(jidStr string) string {
+	jid, err := types.ParseJID(jidStr)
+	if err != nil {
+		return jidStr
+	}
+	if jid.Server != "lid" {
+		return jidStr
+	}
+	pn, err := c.wm.Store.LIDs.GetPNForLID(context.Background(), jid)
+	if err != nil || pn.IsEmpty() {
+		return jidStr
+	}
+	return pn.String()
 }

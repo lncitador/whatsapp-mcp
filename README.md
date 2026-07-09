@@ -7,8 +7,16 @@ any MCP client. Single binary — no Go, no Python required.
 
 ## Install
 
+**macOS / Linux:**
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lncitador/whatsapp-mcp/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+iex (iwr -Uri https://raw.githubusercontent.com/lncitador/whatsapp-mcp/main/install.ps1).Content
 ```
 
 Then register the MCP server:
@@ -46,10 +54,6 @@ daemon (`whatsapp-mcp serve`) that holds the WhatsApp connection (via
 [whatsmeow](https://github.com/tulir/whatsmeow)) and a local-only HTTP API on
 127.0.0.1:8080. The daemon outlives your MCP client, so messages keep being
 received. `whatsapp-mcp status` / `stop` manage it.
-
-Windows: download the binary from
-[Releases](https://github.com/lncitador/whatsapp-mcp/releases), put it on
-your PATH, and register `whatsapp-mcp stdio` in your MCP client.
 
 ## Tools
 

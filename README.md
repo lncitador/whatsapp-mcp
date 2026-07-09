@@ -19,6 +19,11 @@ claude mcp add whatsapp -- whatsapp-mcp stdio
 
 Other clients: configure a stdio server running `whatsapp-mcp stdio`.
 
+> **Note on PromptScript**: PromptScript does not support global skill
+> installation. The installer will skip it automatically. All other agents
+> (Claude Code, Codex, GitHub Copilot, Junie, OpenCode, Qwen Code, Warp, Zed,
+> etc.) are supported.
+
 First use: call the `auth_status` tool (or run `whatsapp-mcp status`) and scan
 the QR code with WhatsApp (Settings → Linked Devices). The daemon keeps your
 session in `~/.whatsapp-mcp/` and stores messages locally in SQLite; nothing

@@ -171,6 +171,26 @@ func TestSendAudioRejectsPathTraversal(t *testing.T) {
 	}
 }
 
+func TestRateLimiting(t *testing.T) {
+	ts, _, _ := newTestServer(t)
+
+	for i := 0; i < 10; i++ {
+		resp, _ := http.Post(ts.URL+"/api/rpc/search_contacts", "application/json",
+			strings.NewReader(`{"query":"test"}`))
+		resp.Body.Close()
+		if resp.StatusCode == 429 {
+			t.Fatalf("rate limited too early at request %d", i)
+		}
+	}
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/search_contacts", "application/json",
+		strings.NewReader(`{"query":"test"}`))
+	resp.Body.Close()
+	if resp.StatusCode != 429 {
+		t.Fatalf("want 429, got %d", resp.StatusCode)
+	}
+}
+
 func TestSendAudioAcceptsValidPath(t *testing.T) {
 	ts, f, _ := newTestServer(t)
 	dir := os.Getenv("WHATSAPP_MCP_DIR")

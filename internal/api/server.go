@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/lncitador/whatsapp-mcp/internal/store"
 	"github.com/lncitador/whatsapp-mcp/internal/wa"
@@ -27,13 +28,18 @@ type Deps struct {
 }
 
 type Server struct {
-	deps Deps
-	mux  *http.ServeMux
-	http *http.Server
+	deps    Deps
+	mux     *http.ServeMux
+	http    *http.Server
+	rateLim *rateLimiter
 }
 
 func New(deps Deps) *Server {
-	s := &Server{deps: deps, mux: http.NewServeMux()}
+	s := &Server{
+		deps:    deps,
+		mux:     http.NewServeMux(),
+		rateLim: newRateLimiter(10, time.Minute),
+	}
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true, "version": deps.Version})
 	})
@@ -46,7 +52,7 @@ func New(deps Deps) *Server {
 			go deps.OnShutdown()
 		}
 	})
-	s.mux.HandleFunc("POST /api/rpc/{tool}", s.handleRPC)
+	s.mux.HandleFunc("POST /api/rpc/{tool}", s.rateLimitMiddleware(s.handleRPC))
 	s.registerLegacy()
 	return s
 }
@@ -66,6 +72,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	return s.http.Shutdown(ctx)
+}
+
+func (s *Server) rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tool := r.PathValue("tool")
+		if !s.rateLim.Allow(tool) {
+			writeError(w, 429, "rate limit exceeded for tool: "+tool)
+			return
+		}
+		next(w, r)
+	}
 }
 
 // Legacy struct types ported from whatsapp-bridge/main.go:193-203, 473-485.

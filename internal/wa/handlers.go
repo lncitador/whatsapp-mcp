@@ -93,9 +93,9 @@ func (c *Client) handleMessage(msg *events.Message) {
 			direction = "→"
 		}
 		if mediaType != "" {
-			fmt.Printf("[%s] %s %s: [%s: %s] %s\n", timestamp, direction, sender, mediaType, filename, content)
+			c.logger.Infof("[%s] %s %s: [%s: %s] %s", timestamp, direction, sender, mediaType, filename, content)
 		} else if content != "" {
-			fmt.Printf("[%s] %s %s: %s\n", timestamp, direction, sender, content)
+			c.logger.Infof("[%s] %s %s: %s", timestamp, direction, sender, content)
 		}
 	}
 }
@@ -155,7 +155,7 @@ func (c *Client) chatName(jid types.JID, chatJID string, conversation any, sende
 }
 
 func (c *Client) handleHistorySync(hs *events.HistorySync) {
-	fmt.Printf("Received history sync event with %d conversations\n", len(hs.Data.Conversations))
+	c.logger.Infof("Received history sync event with %d conversations", len(hs.Data.Conversations))
 
 	syncedCount := 0
 	for _, conversation := range hs.Data.Conversations {
@@ -277,5 +277,5 @@ func (c *Client) handleHistorySync(hs *events.HistorySync) {
 		}
 	}
 
-	fmt.Printf("History sync complete. Stored %d messages.\n", syncedCount)
+	c.logger.Infof("History sync complete. Stored %d messages.", syncedCount)
 }

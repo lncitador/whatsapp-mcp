@@ -67,7 +67,7 @@ func (c *Client) DownloadMedia(messageID, chatJID string) (string, string, strin
 		return "", "", "", fmt.Errorf("incomplete media information for download")
 	}
 
-	fmt.Printf("Attempting to download media for message %s in chat %s...\n", messageID, chatJID)
+	c.logger.Debugf("Attempting to download media for message %s in chat %s", messageID, chatJID)
 
 	directPath := extractDirectPathFromURL(mi.URL)
 
@@ -104,6 +104,6 @@ func (c *Client) DownloadMedia(messageID, chatJID string) (string, string, strin
 		return "", "", "", fmt.Errorf("failed to save media file: %v", err)
 	}
 
-	fmt.Printf("Successfully downloaded %s media to %s (%d bytes)\n", mi.MediaType, absPath, len(mediaData))
+	c.logger.Infof("Successfully downloaded %s media to %s (%d bytes)", mi.MediaType, absPath, len(mediaData))
 	return absPath, mi.MediaType, mi.Filename, nil
 }

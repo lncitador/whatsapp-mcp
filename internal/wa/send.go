@@ -83,7 +83,7 @@ func (c *Client) SendMessage(recipient, message, mediaPath string) (bool, string
 			return false, fmt.Sprintf("Error uploading media: %v", err)
 		}
 
-		fmt.Println("Media uploaded", resp)
+		c.logger.Debugf("Media uploaded %+v", resp)
 
 		switch mediaType {
 		case whatsmeow.MediaImage:
@@ -110,7 +110,7 @@ func (c *Client) SendMessage(recipient, message, mediaPath string) (bool, string
 					return false, fmt.Sprintf("Failed to analyze Ogg Opus file: %v", err)
 				}
 			} else {
-				fmt.Printf("Not an Ogg Opus file: %s\n", mimeType)
+				c.logger.Debugf("Not an Ogg Opus file: %s", mimeType)
 			}
 
 			msg.AudioMessage = &waProto.AudioMessage{

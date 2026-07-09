@@ -54,8 +54,23 @@ func fetchStatus(baseURL string) (state, qr, message string, err error) {
 	return st.State, st.QRCode, st.Message, nil
 }
 
+const instructions = `WhatsApp access for the user's personal account.
+
+To find a person, ALWAYS start with search_contacts (matches real contact-book
+names and phone numbers). Do NOT use list_chats to find a person — it only
+lists conversations and misses contacts without a recent chat.
+
+Typical flow:
+1. search_contacts(query: "name or number") -> pick the contact's JID
+2. list_messages(chat_jid: ...) or get_direct_chat_by_contact(phone) for history
+3. send_message(recipient: JID or phone) to reply
+
+If several contacts match, ask the user which one before sending anything.
+If a tool reports the session is logged out, call auth_status to get a QR code.`
+
 func New(version, baseURL string) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "whatsapp", Version: version}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "whatsapp", Version: version},
+		&mcp.ServerOptions{Instructions: instructions})
 	registerTools(s, baseURL)
 
 	type authIn struct{}

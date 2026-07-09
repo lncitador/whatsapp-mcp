@@ -96,13 +96,13 @@ type leaveGroupIn struct {
 
 func registerTools(s *mcp.Server, baseURL string) {
 	mcp.AddTool(s, &mcp.Tool{Name: "search_contacts",
-		Description: "Search WhatsApp contacts by name or phone number. Matches the phone's contact book, so real names work. Multiple matches are all returned — ask the user to disambiguate."},
+		Description: "Find a WhatsApp contact by name or phone number — ALWAYS use this first when the user mentions a person. Matches the phone's contact book, so real names work even without a recent chat. Returns each match's JID for use with the other tools. Multiple matches are all returned — ask the user to disambiguate."},
 		forward[searchContactsIn](baseURL, "search_contacts"))
 	mcp.AddTool(s, &mcp.Tool{Name: "list_messages",
 		Description: "Get WhatsApp messages matching criteria, with optional surrounding context."},
 		forward[listMessagesIn](baseURL, "list_messages"))
 	mcp.AddTool(s, &mcp.Tool{Name: "list_chats",
-		Description: "Get WhatsApp chats matching criteria."},
+		Description: "List WhatsApp conversations (recent first). NOT for finding a person — use search_contacts for that; a contact without a recent conversation will not appear here."},
 		forward[listChatsIn](baseURL, "list_chats"))
 	mcp.AddTool(s, &mcp.Tool{Name: "get_chat",
 		Description: "Get a WhatsApp chat's metadata by JID."},

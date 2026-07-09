@@ -71,6 +71,10 @@ func Open() (*Store, error) {
 			PRIMARY KEY (id, chat_jid),
 			FOREIGN KEY (chat_jid) REFERENCES chats(jid)
 		);
+		CREATE INDEX IF NOT EXISTS idx_messages_chat_time ON messages(chat_jid, timestamp DESC);
+		CREATE INDEX IF NOT EXISTS idx_messages_sender_time ON messages(sender, timestamp DESC);
+		CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC);
+		CREATE INDEX IF NOT EXISTS idx_chats_last_message ON chats(last_message_time DESC);
 	`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create tables: %w", err)

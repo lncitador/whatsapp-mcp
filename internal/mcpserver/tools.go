@@ -83,6 +83,17 @@ type downloadMediaIn struct {
 	ChatJID   string `json:"chat_jid" jsonschema:"JID of the chat containing the message"`
 }
 
+type createGroupIn struct {
+	Name               string   `json:"name" jsonschema:"group name (max 25 chars)"`
+	Participants       []string `json:"participants" jsonschema:"list of phone numbers or JIDs to add"`
+	IsCommunity        bool     `json:"is_community,omitempty" jsonschema:"create as community group"`
+	CommunityParentJID string   `json:"community_parent_jid,omitempty" jsonschema:"attach as sub-group of this community"`
+}
+
+type leaveGroupIn struct {
+	JID string `json:"jid" jsonschema:"group JID (must end with @g.us)"`
+}
+
 func registerTools(s *mcp.Server, baseURL string) {
 	mcp.AddTool(s, &mcp.Tool{Name: "search_contacts",
 		Description: "Search WhatsApp contacts by name or phone number. Matches the phone's contact book, so real names work. Multiple matches are all returned — ask the user to disambiguate."},
@@ -120,4 +131,10 @@ func registerTools(s *mcp.Server, baseURL string) {
 	mcp.AddTool(s, &mcp.Tool{Name: "download_media",
 		Description: "Download media from a WhatsApp message; returns the local file path."},
 		forward[downloadMediaIn](baseURL, "download_media"))
+	mcp.AddTool(s, &mcp.Tool{Name: "create_group",
+		Description: "Create a new WhatsApp group. Participants can be phone numbers or JIDs. Optionally create as community or attach to existing community."},
+		forward[createGroupIn](baseURL, "create_group"))
+	mcp.AddTool(s, &mcp.Tool{Name: "leave_group",
+		Description: "Leave a WhatsApp group. Other members will continue to see the group."},
+		forward[leaveGroupIn](baseURL, "leave_group"))
 }

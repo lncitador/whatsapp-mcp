@@ -13,25 +13,29 @@ import (
 )
 
 type rpcArgs struct {
-	Query              string `json:"query"`
-	After              string `json:"after"`
-	Before             string `json:"before"`
-	SenderPhoneNumber  string `json:"sender_phone_number"`
-	ChatJID            string `json:"chat_jid"`
-	Limit              int    `json:"limit"`
-	Page               int    `json:"page"`
-	IncludeContext     *bool  `json:"include_context"`
-	ContextBefore      int    `json:"context_before"`
-	ContextAfter       int    `json:"context_after"`
-	IncludeLastMessage *bool  `json:"include_last_message"`
-	SortBy             string `json:"sort_by"`
-	JID                string `json:"jid"`
-	MessageID          string `json:"message_id"`
-	Recipient          string `json:"recipient"`
-	Message            string `json:"message"`
-	MediaPath          string `json:"media_path"`
-	ReplyToMessageID   string `json:"reply_to_message_id"`
-	ReplyToSenderJID   string `json:"reply_to_sender_jid"`
+	Query              string   `json:"query"`
+	After              string   `json:"after"`
+	Before             string   `json:"before"`
+	SenderPhoneNumber  string   `json:"sender_phone_number"`
+	ChatJID            string   `json:"chat_jid"`
+	Limit              int      `json:"limit"`
+	Page               int      `json:"page"`
+	IncludeContext     *bool    `json:"include_context"`
+	ContextBefore      int      `json:"context_before"`
+	ContextAfter       int      `json:"context_after"`
+	IncludeLastMessage *bool    `json:"include_last_message"`
+	SortBy             string   `json:"sort_by"`
+	JID                string   `json:"jid"`
+	MessageID          string   `json:"message_id"`
+	Recipient          string   `json:"recipient"`
+	Message            string   `json:"message"`
+	MediaPath          string   `json:"media_path"`
+	ReplyToMessageID   string   `json:"reply_to_message_id"`
+	ReplyToSenderJID   string   `json:"reply_to_sender_jid"`
+	Name               string   `json:"name"`
+	Participants       []string `json:"participants"`
+	IsCommunity        bool     `json:"is_community"`
+	CommunityParentJID string   `json:"community_parent_jid"`
 }
 
 func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
@@ -195,6 +199,31 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		respond(w, map[string]any{"path": path, "media_type": mediaType, "filename": filename}, nil)
+	case "create_group":
+		if a.Name == "" {
+			writeError(w, 400, "name is required")
+			return
+		}
+		if len(a.Participants) == 0 {
+			writeError(w, 400, "at least one participant is required")
+			return
+		}
+		groupJID, err := s.deps.WA.CreateGroup(a.Name, a.Participants, a.IsCommunity, a.CommunityParentJID)
+		if err != nil {
+			respond(w, nil, err)
+			return
+		}
+		respond(w, map[string]any{"success": true, "group_jid": groupJID}, nil)
+	case "leave_group":
+		if a.JID == "" {
+			writeError(w, 400, "jid is required")
+			return
+		}
+		if err := s.deps.WA.LeaveGroup(a.JID); err != nil {
+			respond(w, nil, err)
+			return
+		}
+		respond(w, map[string]any{"success": true}, nil)
 	default:
 		writeError(w, 404, "unknown tool: "+tool)
 	}

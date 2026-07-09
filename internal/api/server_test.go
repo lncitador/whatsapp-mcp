@@ -22,6 +22,12 @@ func (f *fakeWA) SendMessage(r, m, p, replyToID, replyToSender string) (bool, st
 func (f *fakeWA) DownloadMedia(id, jid string) (string, string, string, error) {
 	return "/tmp/x.jpg", "image", "x.jpg", nil
 }
+func (f *fakeWA) CreateGroup(name string, participants []string, isCommunity bool, communityParentJID string) (string, error) {
+	return "120363000000000000@g.us", nil
+}
+func (f *fakeWA) LeaveGroup(jid string) error {
+	return nil
+}
 
 func newTestServer(t *testing.T) (*httptest.Server, *fakeWA, *store.Store) {
 	t.Helper()

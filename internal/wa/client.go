@@ -7,10 +7,13 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	_ "modernc.org/sqlite"
@@ -127,3 +130,79 @@ func (c *Client) Start(ctx context.Context) error {
 }
 
 func (c *Client) Stop() { c.wm.Disconnect() }
+
+func (c *Client) CreateGroup(name string, participants []string, isCommunity bool, communityParentJID string) (string, error) {
+	if !c.wm.IsConnected() {
+		return "", fmt.Errorf("not connected to WhatsApp")
+	}
+
+	if len(name) > 25 {
+		return "", fmt.Errorf("group name too long (max 25 chars, got %d)", len(name))
+	}
+
+	if len(participants) == 0 {
+		return "", fmt.Errorf("at least one participant is required")
+	}
+
+	var participantJIDs []types.JID
+	for _, p := range participants {
+		if strings.Contains(p, "@") {
+			jid, err := types.ParseJID(p)
+			if err != nil {
+				return "", fmt.Errorf("invalid participant JID %q: %w", p, err)
+			}
+			participantJIDs = append(participantJIDs, jid)
+		} else {
+			participantJIDs = append(participantJIDs, types.JID{
+				User:   p,
+				Server: "s.whatsapp.net",
+			})
+		}
+	}
+
+	req := whatsmeow.ReqCreateGroup{
+		Name:         name,
+		Participants: participantJIDs,
+	}
+
+	if isCommunity {
+		req.IsParent = true
+	}
+
+	if communityParentJID != "" {
+		parentJID, err := types.ParseJID(communityParentJID)
+		if err != nil {
+			return "", fmt.Errorf("invalid community parent JID: %w", err)
+		}
+		req.LinkedParentJID = parentJID
+	}
+
+	groupInfo, err := c.wm.CreateGroup(context.Background(), req)
+	if err != nil {
+		return "", fmt.Errorf("create group: %w", err)
+	}
+
+	groupJID := groupInfo.JID.String()
+	if err := c.st.StoreChat(groupJID, name, time.Now()); err != nil {
+		c.logger.Warnf("Failed to store new group chat: %v", err)
+	}
+
+	return groupJID, nil
+}
+
+func (c *Client) LeaveGroup(jid string) error {
+	if !c.wm.IsConnected() {
+		return fmt.Errorf("not connected to WhatsApp")
+	}
+
+	groupJID, err := types.ParseJID(jid)
+	if err != nil {
+		return fmt.Errorf("invalid group JID: %w", err)
+	}
+
+	if groupJID.Server != "g.us" {
+		return fmt.Errorf("not a group JID (must end with @g.us)")
+	}
+
+	return c.wm.LeaveGroup(context.Background(), groupJID)
+}

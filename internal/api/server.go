@@ -18,6 +18,8 @@ type WA interface {
 	Status() wa.Status
 	SendMessage(recipient, message, mediaPath, replyToMessageID, replyToSenderJID string) (bool, string)
 	DownloadMedia(messageID, chatJID string) (path, mediaType, filename string, err error)
+	CreateGroup(name string, participants []string, isCommunity bool, communityParentJID string) (string, error)
+	LeaveGroup(jid string) error
 }
 
 type Deps struct {

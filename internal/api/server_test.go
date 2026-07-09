@@ -170,3 +170,21 @@ func TestSendAudioRejectsPathTraversal(t *testing.T) {
 		t.Fatalf("message should not have been sent: %v", f.sent)
 	}
 }
+
+func TestSendAudioAcceptsValidPath(t *testing.T) {
+	ts, f, _ := newTestServer(t)
+	dir := os.Getenv("WHATSAPP_MCP_DIR")
+	mediaDir := filepath.Join(dir, "media")
+	os.MkdirAll(mediaDir, 0755)
+	audio := filepath.Join(mediaDir, "voice.ogg")
+	os.WriteFile(audio, []byte("fake"), 0644)
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_audio_message", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"recipient":"5511999999999","media_path":"%s"}`, audio)))
+	if resp.StatusCode != 200 {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	if len(f.sent) != 1 {
+		t.Fatalf("want 1 sent, got %d", len(f.sent))
+	}
+}

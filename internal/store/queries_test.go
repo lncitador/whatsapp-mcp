@@ -84,11 +84,41 @@ func TestContactHelpers(t *testing.T) {
 	if len(chats) != 1 || chats[0].JID != "123-group@g.us" {
 		t.Fatalf("got %+v", chats)
 	}
-	m, _ := s.GetLastInteraction("5511999999999")
+	// Full JID matches chat, returns newest message A2
+	m, _ := s.GetLastInteraction("5511999999999@s.whatsapp.net")
 	if m == nil || m.ID != "A2" {
 		t.Fatalf("got %+v", m)
 	}
+	// Bare phone matches sender of A1
+	m, _ = s.GetLastInteraction("5511999999999")
+	if m == nil || m.ID != "A1" {
+		t.Fatalf("bare phone: got %+v, want A1", m)
+	}
 	if name := s.SenderName("5511999999999@s.whatsapp.net"); name != "Alice" {
 		t.Fatalf("SenderName = %q", name)
+	}
+}
+
+func TestChatsWithoutLastMessage(t *testing.T) {
+	s := seed(t)
+	chats, err := s.ListChats("", 20, 0, false, "last_active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chats) != 2 {
+		t.Fatalf("want 2 chats, got %d", len(chats))
+	}
+	for _, c := range chats {
+		if c.LastMessage != "" || c.LastSender != "" {
+			t.Fatalf("want empty LastMessage/LastSender, got %+v", c)
+		}
+		if c.LastMessageTime == nil {
+			t.Fatalf("want non-nil LastMessageTime, got %+v", c)
+		}
+	}
+
+	c, err := s.GetChat("5511999999999@s.whatsapp.net", false)
+	if err != nil || c == nil || c.Name != "Alice" || c.LastMessage != "" {
+		t.Fatalf("c=%+v err=%v", c, err)
 	}
 }

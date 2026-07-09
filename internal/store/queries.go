@@ -256,8 +256,8 @@ func (s *Store) GetContactChats(jid string, limit, page int) ([]Chat, error) {
 func (s *Store) GetLastInteraction(jid string) (*Message, error) {
 	row := s.db.QueryRow(
 		"SELECT "+messageCols+" FROM messages JOIN chats ON messages.chat_jid = chats.jid"+
-			" WHERE messages.sender = ? OR messages.chat_jid LIKE ? ORDER BY messages.timestamp DESC LIMIT 1",
-		jid, "%"+jid+"%")
+			" WHERE messages.sender = ? OR chats.jid = ? ORDER BY messages.timestamp DESC LIMIT 1",
+		jid, jid)
 	m, err := scanMessage(row)
 	if err == sql.ErrNoRows {
 		return nil, nil

@@ -15,8 +15,10 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "serve":
-		fmt.Fprintln(os.Stderr, "serve: not implemented yet")
-		os.Exit(1)
+		if err := runServe(version); err != nil {
+			fmt.Fprintln(os.Stderr, "serve:", err)
+			os.Exit(1)
+		}
 	case "stdio":
 		fmt.Fprintln(os.Stderr, "stdio: not implemented yet")
 		os.Exit(1)

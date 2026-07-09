@@ -81,6 +81,21 @@ func (a *approvalSystem) Remove(id string) {
 	delete(a.requests, id)
 }
 
+func (a *approvalSystem) GetAndRemove(id string) (*pendingRequest, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	r, ok := a.requests[id]
+	if !ok {
+		return nil, false
+	}
+	if time.Since(r.CreatedAt) > 5*time.Minute {
+		delete(a.requests, id)
+		return nil, false
+	}
+	delete(a.requests, id)
+	return r, true
+}
+
 type Server struct {
 	deps      Deps
 	mux       *http.ServeMux
@@ -236,7 +251,7 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("request_id")
-	req, ok := s.approvals.Get(id)
+	req, ok := s.approvals.GetAndRemove(id)
 	if !ok {
 		writeError(w, 404, "approval request not found or expired")
 		return
@@ -258,7 +273,6 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 502, msg)
 		return
 	}
-	s.approvals.Remove(id)
 	respond(w, map[string]any{"success": true, "message": msg}, nil)
 }
 

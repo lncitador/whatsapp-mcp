@@ -100,3 +100,52 @@ func TestLegacySendEndpoint(t *testing.T) {
 		t.Fatalf("legacy send failed: %d", resp.StatusCode)
 	}
 }
+
+func TestRPCSendMessageWithReply(t *testing.T) {
+	ts, f, _ := newTestServer(t)
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_message", "application/json",
+		strings.NewReader(`{"recipient":"5511999999999","message":"reply test","reply_to_message_id":"msg123","reply_to_sender_jid":"5511888888888@s.whatsapp.net"}`))
+	if resp.StatusCode != 200 || len(f.sent) != 1 {
+		t.Fatalf("status=%d sent=%v", resp.StatusCode, f.sent)
+	}
+	if f.sent[0][3] != "msg123" || f.sent[0][4] != "5511888888888@s.whatsapp.net" {
+		t.Fatalf("reply fields not passed: %v", f.sent[0])
+	}
+}
+
+func TestRPCCreateGroup(t *testing.T) {
+	ts, _, _ := newTestServer(t)
+	resp, _ := http.Post(ts.URL+"/api/rpc/create_group", "application/json",
+		strings.NewReader(`{"name":"Test Group","participants":["5511999999999","5511888888888"]}`))
+	if resp.StatusCode != 200 {
+		t.Fatalf("create_group failed: %d", resp.StatusCode)
+	}
+	var body struct {
+		Result struct {
+			Success  bool   `json:"success"`
+			GroupJID string `json:"group_jid"`
+		} `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if !body.Result.Success || body.Result.GroupJID == "" {
+		t.Fatalf("unexpected result: %+v", body)
+	}
+}
+
+func TestRPCLeaveGroup(t *testing.T) {
+	ts, _, _ := newTestServer(t)
+	resp, _ := http.Post(ts.URL+"/api/rpc/leave_group", "application/json",
+		strings.NewReader(`{"jid":"120363000000000000@g.us"}`))
+	if resp.StatusCode != 200 {
+		t.Fatalf("leave_group failed: %d", resp.StatusCode)
+	}
+}
+
+func TestRPCSendMessagePathTraversal(t *testing.T) {
+	ts, _, _ := newTestServer(t)
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_file", "application/json",
+		strings.NewReader(`{"recipient":"5511999999999","media_path":"../../../etc/passwd"}`))
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400 for path traversal, got %d", resp.StatusCode)
+	}
+}

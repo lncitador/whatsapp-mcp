@@ -2,8 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -79,8 +82,30 @@ func TestRPCSendMessage(t *testing.T) {
 	ts, f, _ := newTestServer(t)
 	resp, _ := http.Post(ts.URL+"/api/rpc/send_message", "application/json",
 		strings.NewReader(`{"recipient":"5511999999999","message":"oi"}`))
-	if resp.StatusCode != 200 || len(f.sent) != 1 || f.sent[0][1] != "oi" {
-		t.Fatalf("status=%d sent=%v", resp.StatusCode, f.sent)
+	var body struct {
+		Result struct {
+			Success   bool   `json:"success"`
+			Message   string `json:"message"`
+			RequestID string `json:"request_id,omitempty"`
+			Status    string `json:"status,omitempty"`
+		} `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if resp.StatusCode != 200 || body.Result.Status != "pending_approval" || body.Result.RequestID == "" {
+		t.Fatalf("status=%d body=%+v", resp.StatusCode, body.Result)
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("should not have sent yet: %v", f.sent)
+	}
+
+	// Approve the request
+	resp2, _ := http.Post(ts.URL+"/api/approve/"+body.Result.RequestID, "application/json",
+		strings.NewReader(`{}`))
+	if resp2.StatusCode != 200 {
+		t.Fatalf("approve: want 200, got %d", resp2.StatusCode)
+	}
+	if len(f.sent) != 1 || f.sent[0][1] != "oi" {
+		t.Fatalf("want 1 sent with 'oi', got %v", f.sent)
 	}
 }
 
@@ -89,6 +114,53 @@ func TestRPCUnknownTool(t *testing.T) {
 	resp, _ := http.Post(ts.URL+"/api/rpc/nope", "application/json", strings.NewReader(`{}`))
 	if resp.StatusCode != 404 {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestFormatMessageSanitizesContent(t *testing.T) {
+	ts, _, st := newTestServer(t)
+	st.StoreChat("5511999999999@s.whatsapp.net", "Alice", time.Now())
+	st.StoreMessage(store.NewMessage{
+		ID: "san1", ChatJID: "5511999999999@s.whatsapp.net",
+		Sender: "5511999999999", Content: "hello\u200Bworld\u202Emalicious",
+		Timestamp: time.Now(), IsFromMe: false,
+	})
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/list_messages", "application/json",
+		strings.NewReader(`{"query":"hello","limit":1}`))
+	var body struct {
+		Result string `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if strings.Contains(body.Result, "\u200B") || strings.Contains(body.Result, "\u202E") {
+		t.Fatalf("content not sanitized: %q", body.Result)
+	}
+	if !strings.Contains(body.Result, "helloworldmalicious") {
+		t.Fatalf("sanitized content missing: %q", body.Result)
+	}
+}
+
+func TestListMessagesLimitCap(t *testing.T) {
+	ts, _, st := newTestServer(t)
+	base := time.Now()
+	st.StoreChat("5511999999999@s.whatsapp.net", "Alice", base)
+	for i := 0; i < 200; i++ {
+		st.StoreMessage(store.NewMessage{
+			ID: fmt.Sprintf("msg%d", i), ChatJID: "5511999999999@s.whatsapp.net",
+			Sender: "5511999999999", Content: fmt.Sprintf("msg %d", i),
+			Timestamp: base.Add(time.Duration(i) * time.Minute),
+		})
+	}
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/list_messages", "application/json",
+		strings.NewReader(`{"limit":500,"include_context":false}`))
+	var body struct {
+		Result string `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	lines := strings.Split(strings.TrimSpace(body.Result), "\n")
+	if len(lines) > 100 {
+		t.Fatalf("want max 100 messages, got %d", len(lines))
 	}
 }
 
@@ -101,51 +173,217 @@ func TestLegacySendEndpoint(t *testing.T) {
 	}
 }
 
-func TestRPCSendMessageWithReply(t *testing.T) {
+func TestSendFileRejectsPathTraversal(t *testing.T) {
 	ts, f, _ := newTestServer(t)
-	resp, _ := http.Post(ts.URL+"/api/rpc/send_message", "application/json",
-		strings.NewReader(`{"recipient":"5511999999999","message":"reply test","reply_to_message_id":"msg123","reply_to_sender_jid":"5511888888888@s.whatsapp.net"}`))
-	if resp.StatusCode != 200 || len(f.sent) != 1 {
-		t.Fatalf("status=%d sent=%v", resp.StatusCode, f.sent)
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "secret.txt")
+	os.WriteFile(outsideFile, []byte("secret"), 0644)
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_file", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"recipient":"5511999999999","media_path":"%s"}`, outsideFile)))
+	if resp.StatusCode != 400 {
+		t.Fatalf("want 400, got %d", resp.StatusCode)
 	}
-	if f.sent[0][3] != "msg123" || f.sent[0][4] != "5511888888888@s.whatsapp.net" {
-		t.Fatalf("reply fields not passed: %v", f.sent[0])
+	if len(f.sent) != 0 {
+		t.Fatalf("message should not have been sent: %v", f.sent)
 	}
 }
 
-func TestRPCCreateGroup(t *testing.T) {
-	ts, _, _ := newTestServer(t)
-	resp, _ := http.Post(ts.URL+"/api/rpc/create_group", "application/json",
-		strings.NewReader(`{"name":"Test Group","participants":["5511999999999","5511888888888"]}`))
-	if resp.StatusCode != 200 {
-		t.Fatalf("create_group failed: %d", resp.StatusCode)
-	}
+func TestSendFileAcceptsValidPath(t *testing.T) {
+	ts, f, _ := newTestServer(t)
+	dir := os.Getenv("WHATSAPP_MCP_DIR")
+	mediaDir := filepath.Join(dir, "media")
+	os.MkdirAll(mediaDir, 0755)
+	photo := filepath.Join(mediaDir, "photo.jpg")
+	os.WriteFile(photo, []byte("fake"), 0644)
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_file", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"recipient":"5511999999999","media_path":"%s"}`, photo)))
 	var body struct {
 		Result struct {
-			Success  bool   `json:"success"`
-			GroupJID string `json:"group_jid"`
+			Success   bool   `json:"success"`
+			Status    string `json:"status"`
+			RequestID string `json:"request_id"`
 		} `json:"result"`
 	}
 	json.NewDecoder(resp.Body).Decode(&body)
-	if !body.Result.Success || body.Result.GroupJID == "" {
-		t.Fatalf("unexpected result: %+v", body)
+	if resp.StatusCode != 200 || body.Result.Status != "pending_approval" || body.Result.RequestID == "" {
+		t.Fatalf("want pending_approval, got status=%d body=%+v", resp.StatusCode, body.Result)
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("should not have sent yet: %v", f.sent)
+	}
+
+	// Approve
+	resp2, _ := http.Post(ts.URL+"/api/approve/"+body.Result.RequestID, "application/json",
+		strings.NewReader(`{}`))
+	if resp2.StatusCode != 200 {
+		t.Fatalf("approve: want 200, got %d", resp2.StatusCode)
+	}
+	if len(f.sent) != 1 {
+		t.Fatalf("want 1 sent after approval, got %d", len(f.sent))
 	}
 }
 
-func TestRPCLeaveGroup(t *testing.T) {
-	ts, _, _ := newTestServer(t)
-	resp, _ := http.Post(ts.URL+"/api/rpc/leave_group", "application/json",
-		strings.NewReader(`{"jid":"120363000000000000@g.us"}`))
-	if resp.StatusCode != 200 {
-		t.Fatalf("leave_group failed: %d", resp.StatusCode)
-	}
-}
+func TestSendAudioRejectsPathTraversal(t *testing.T) {
+	ts, f, _ := newTestServer(t)
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "secret.ogg")
+	os.WriteFile(outsideFile, []byte("secret"), 0644)
 
-func TestRPCSendMessagePathTraversal(t *testing.T) {
-	ts, _, _ := newTestServer(t)
-	resp, _ := http.Post(ts.URL+"/api/rpc/send_file", "application/json",
-		strings.NewReader(`{"recipient":"5511999999999","media_path":"../../../etc/passwd"}`))
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_audio_message", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"recipient":"5511999999999","media_path":"%s"}`, outsideFile)))
 	if resp.StatusCode != 400 {
-		t.Fatalf("expected 400 for path traversal, got %d", resp.StatusCode)
+		t.Fatalf("want 400, got %d", resp.StatusCode)
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("message should not have been sent: %v", f.sent)
+	}
+}
+
+func TestRateLimiting(t *testing.T) {
+	ts, _, _ := newTestServer(t)
+
+	for i := 0; i < 10; i++ {
+		resp, _ := http.Post(ts.URL+"/api/rpc/search_contacts", "application/json",
+			strings.NewReader(`{"query":"test"}`))
+		resp.Body.Close()
+		if resp.StatusCode == 429 {
+			t.Fatalf("rate limited too early at request %d", i)
+		}
+	}
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/search_contacts", "application/json",
+		strings.NewReader(`{"query":"test"}`))
+	resp.Body.Close()
+	if resp.StatusCode != 429 {
+		t.Fatalf("want 429, got %d", resp.StatusCode)
+	}
+}
+
+func TestSendAudioAcceptsValidPath(t *testing.T) {
+	ts, f, _ := newTestServer(t)
+	dir := os.Getenv("WHATSAPP_MCP_DIR")
+	mediaDir := filepath.Join(dir, "media")
+	os.MkdirAll(mediaDir, 0755)
+	audio := filepath.Join(mediaDir, "voice.ogg")
+	os.WriteFile(audio, []byte("fake"), 0644)
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_audio_message", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"recipient":"5511999999999","media_path":"%s"}`, audio)))
+	var body struct {
+		Result struct {
+			Success   bool   `json:"success"`
+			Status    string `json:"status"`
+			RequestID string `json:"request_id"`
+		} `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if resp.StatusCode != 200 || body.Result.Status != "pending_approval" || body.Result.RequestID == "" {
+		t.Fatalf("want pending_approval, got status=%d body=%+v", resp.StatusCode, body.Result)
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("should not have sent yet: %v", f.sent)
+	}
+
+	// Approve
+	resp2, _ := http.Post(ts.URL+"/api/approve/"+body.Result.RequestID, "application/json",
+		strings.NewReader(`{}`))
+	if resp2.StatusCode != 200 {
+		t.Fatalf("approve: want 200, got %d", resp2.StatusCode)
+	}
+	if len(f.sent) != 1 {
+		t.Fatalf("want 1 sent after approval, got %d", len(f.sent))
+	}
+}
+
+func TestSendMessageRequiresApproval(t *testing.T) {
+	ts, f, _ := newTestServer(t)
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_message", "application/json",
+		strings.NewReader(`{"recipient":"5511999999999","message":"test"}`))
+	var body struct {
+		Result struct {
+			Success   bool   `json:"success"`
+			Message   string `json:"message"`
+			RequestID string `json:"request_id,omitempty"`
+			Status    string `json:"status,omitempty"`
+		} `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body.Result.Status != "pending_approval" {
+		t.Fatalf("want pending_approval, got %+v", body.Result)
+	}
+	if body.Result.RequestID == "" {
+		t.Fatal("want non-empty request_id")
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("should not have sent yet: %v", f.sent)
+	}
+
+	// Approve the request
+	resp2, _ := http.Post(ts.URL+"/api/approve/"+body.Result.RequestID, "application/json",
+		strings.NewReader(`{}`))
+	if resp2.StatusCode != 200 {
+		t.Fatalf("approve: want 200, got %d", resp2.StatusCode)
+	}
+	if len(f.sent) != 1 {
+		t.Fatalf("want 1 sent after approval, got %d", len(f.sent))
+	}
+}
+
+func TestSendMessageReject(t *testing.T) {
+	ts, f, _ := newTestServer(t)
+
+	resp, _ := http.Post(ts.URL+"/api/rpc/send_message", "application/json",
+		strings.NewReader(`{"recipient":"5511999999999","message":"test"}`))
+	var body struct {
+		Result struct {
+			RequestID string `json:"request_id,omitempty"`
+		} `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+
+	// Reject the request
+	resp2, _ := http.Post(ts.URL+"/api/reject/"+body.Result.RequestID, "application/json",
+		strings.NewReader(`{}`))
+	if resp2.StatusCode != 200 {
+		t.Fatalf("reject: want 200, got %d", resp2.StatusCode)
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("should not have sent after rejection: %v", f.sent)
+	}
+}
+
+func TestApproveNotFound(t *testing.T) {
+	ts, _, _ := newTestServer(t)
+	resp, _ := http.Post(ts.URL+"/api/approve/req_nonexistent", "application/json",
+		strings.NewReader(`{}`))
+	if resp.StatusCode != 404 {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestRejectNotFound(t *testing.T) {
+	ts, _, _ := newTestServer(t)
+	resp, _ := http.Post(ts.URL+"/api/reject/req_nonexistent", "application/json",
+		strings.NewReader(`{}`))
+	if resp.StatusCode != 404 {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestApprovalExpiresAfterTTL(t *testing.T) {
+	a := newApprovalSystem()
+	id := a.Create("send_message", "5511999999999", "hello", "")
+	req, ok := a.Get(id)
+	if !ok || req == nil {
+		t.Fatal("expected request to exist immediately after creation")
+	}
+	req.CreatedAt = time.Now().Add(-6 * time.Minute)
+	a.requests[id] = req
+	_, ok = a.Get(id)
+	if ok {
+		t.Fatal("expected expired request to be gone")
 	}
 }

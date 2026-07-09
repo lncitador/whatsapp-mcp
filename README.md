@@ -63,6 +63,31 @@ download_media, create_group, leave_group, auth_status.
 - **Security**: Path traversal protection (`WHATSAPP_MEDIA_ROOTS`), pagination caps
 - **Performance**: SQLite indexes on hot paths
 
+## Security
+
+This MCP server implements several mitigations against the
+[lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/)
+(private data + untrusted content + external communication):
+
+- **Content sanitization**: Message content is stripped of zero-width and
+  bidirectional control characters before being returned to the LLM.
+- **Path restriction**: `send_file` and `send_audio_message` can only access
+  files under `~/.whatsapp-mcp/`. Path traversal attempts are blocked.
+- **Rate limiting**: Each tool is limited to 10 requests per minute.
+- **Human approval gate**: `send_message`, `send_file`, and
+  `send_audio_message` require explicit approval via `/api/approve/{id}`
+  before messages are actually sent.
+- **Audit logging**: All tool invocations are logged to
+  `~/.whatsapp-mcp/logs/audit.log`.
+- **Query limits**: `list_messages` is capped at 100 results per request.
+
+**Remaining risks you should be aware of:**
+- Message content from unknown contacts could still contain prompt injection
+  payloads. The LLM client must treat all message content as untrusted data.
+- The approval gate is enforced server-side, but the MCP client (Claude) must
+  be configured to present the approval request to the user rather than
+  auto-approving.
+
 ## Development
 
 ```sh

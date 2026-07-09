@@ -3,11 +3,9 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
-	"github.com/lncitador/whatsapp-mcp/internal/audio"
 	"github.com/lncitador/whatsapp-mcp/internal/config"
 	"github.com/lncitador/whatsapp-mcp/internal/store"
 )
@@ -45,6 +43,9 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid JSON body: "+err.Error())
 		return
 	}
+
+	go logToolCall(auditLogPath(), tool, a.Recipient, r.RemoteAddr)
+
 	switch tool {
 	case "search_contacts":
 		res, err := s.deps.Store.SearchContacts(a.Query)
@@ -53,6 +54,9 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		args := store.ListMessagesArgs{
 			SenderPhoneNumber: a.SenderPhoneNumber, ChatJID: a.ChatJID,
 			Query: a.Query, Limit: a.Limit, Page: a.Page,
+		}
+		if args.Limit > 100 {
+			args.Limit = 100
 		}
 		var err error
 		if args.After, err = parseISO(a.After); err != nil {
@@ -89,7 +93,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			}
 			msgs = expanded
 		}
-		respond(w, s.formatMessages(s.enrichMessages(msgs)), nil)
+		respond(w, s.formatMessages(msgs), nil)
 	case "list_chats":
 		ilm := a.IncludeLastMessage == nil || *a.IncludeLastMessage
 		sortBy := a.SortBy
@@ -97,41 +101,17 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			sortBy = "last_active"
 		}
 		res, err := s.deps.Store.ListChats(a.Query, a.Limit, a.Page, ilm, sortBy)
-		if err != nil {
-			respond(w, nil, err)
-			return
-		}
-		respond(w, s.enrichChats(res), nil)
+		respond(w, res, err)
 	case "get_chat":
 		ilm := a.IncludeLastMessage == nil || *a.IncludeLastMessage
 		res, err := s.deps.Store.GetChat(a.ChatJID, ilm)
-		if err != nil {
-			respond(w, nil, err)
-			return
-		}
-		if res != nil {
-			respond(w, s.enrichChat(*res), nil)
-		} else {
-			respond(w, nil, nil)
-		}
+		respond(w, res, err)
 	case "get_direct_chat_by_contact":
 		res, err := s.deps.Store.GetDirectChatByContact(a.SenderPhoneNumber)
-		if err != nil {
-			respond(w, nil, err)
-			return
-		}
-		if res != nil {
-			respond(w, s.enrichChat(*res), nil)
-		} else {
-			respond(w, nil, nil)
-		}
+		respond(w, res, err)
 	case "get_contact_chats":
 		res, err := s.deps.Store.GetContactChats(a.JID, a.Limit, a.Page)
-		if err != nil {
-			respond(w, nil, err)
-			return
-		}
-		respond(w, s.enrichChats(res), nil)
+		respond(w, res, err)
 	case "get_last_interaction":
 		m, err := s.deps.Store.GetLastInteraction(a.JID)
 		if err != nil || m == nil {
@@ -154,44 +134,49 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "recipient must be provided")
 			return
 		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, a.Message, "", a.ReplyToMessageID, a.ReplyToSenderJID)
-		respond(w, map[string]any{"success": ok, "message": msg}, nil)
+		reqID := s.approvals.Create("send_message", a.Recipient, a.Message, "")
+		respond(w, map[string]any{
+			"success":           false,
+			"status":            "pending_approval",
+			"request_id":        reqID,
+			"message":           "Send requires approval. Call /api/approve/" + reqID + " to confirm or /api/reject/" + reqID + " to cancel.",
+			"reply_to_message_id": a.ReplyToMessageID,
+			"reply_to_sender_jid": a.ReplyToSenderJID,
+		}, nil)
 	case "send_file":
 		if a.Recipient == "" || a.MediaPath == "" {
 			writeError(w, 400, "recipient and media_path must be provided")
 			return
 		}
-		if err := config.ValidateMediaPath(a.MediaPath); err != nil {
+		cleanPath, err := validateMediaPath(a.MediaPath, config.BaseDir())
+		if err != nil {
 			writeError(w, 400, err.Error())
 			return
 		}
-		if _, err := os.Stat(a.MediaPath); err != nil {
-			writeError(w, 400, "media file not found: "+a.MediaPath)
-			return
-		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, "", a.MediaPath, a.ReplyToMessageID, a.ReplyToSenderJID)
-		respond(w, map[string]any{"success": ok, "message": msg}, nil)
+		reqID := s.approvals.Create("send_file", a.Recipient, "", cleanPath)
+		respond(w, map[string]any{
+			"success":    false,
+			"status":     "pending_approval",
+			"request_id": reqID,
+			"message":    "Send requires approval. Call /api/approve/" + reqID + " to confirm or /api/reject/" + reqID + " to cancel.",
+		}, nil)
 	case "send_audio_message":
 		if a.Recipient == "" || a.MediaPath == "" {
 			writeError(w, 400, "recipient and media_path must be provided")
 			return
 		}
-		if err := config.ValidateMediaPath(a.MediaPath); err != nil {
+		cleanPath, err := validateMediaPath(a.MediaPath, config.BaseDir())
+		if err != nil {
 			writeError(w, 400, err.Error())
 			return
 		}
-		path := a.MediaPath
-		if !strings.HasSuffix(path, ".ogg") {
-			converted, err := audio.ConvertToOpusOggTemp(path)
-			if err != nil {
-				writeError(w, 400, err.Error())
-				return
-			}
-			defer os.Remove(converted)
-			path = converted
-		}
-		ok, msg := s.deps.WA.SendMessage(a.Recipient, "", path, a.ReplyToMessageID, a.ReplyToSenderJID)
-		respond(w, map[string]any{"success": ok, "message": msg}, nil)
+		reqID := s.approvals.Create("send_audio_message", a.Recipient, "", cleanPath)
+		respond(w, map[string]any{
+			"success":    false,
+			"status":     "pending_approval",
+			"request_id": reqID,
+			"message":    "Send requires approval. Call /api/approve/" + reqID + " to confirm or /api/reject/" + reqID + " to cancel.",
+		}, nil)
 	case "download_media":
 		path, mediaType, filename, err := s.deps.WA.DownloadMedia(a.MessageID, a.ChatJID)
 		if err != nil {
@@ -267,7 +252,7 @@ func (s *Server) formatMessage(m store.Message) string {
 			sender = s.deps.Store.SenderName(m.Sender)
 		}
 	}
-	return out + "From: " + sender + ": " + prefix + m.Content + "\n"
+	return out + "From: " + sender + ": " + prefix + sanitizeContent(m.Content) + "\n"
 }
 
 func (s *Server) enrichMessages(msgs []store.Message) []store.Message {

@@ -17,8 +17,7 @@ case "$os" in
   *) echo "unsupported OS: $os (Windows: download from https://github.com/$REPO/releases)" >&2; exit 1 ;;
 esac
 
-tag=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
-  grep '"tag_name"' | head -1 | cut -d '"' -f 4)
+tag=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" | awk -F/ '{print $NF}')
 [ -n "$tag" ] || { echo "could not resolve latest release" >&2; exit 1; }
 version=${tag#v}
 
@@ -53,7 +52,6 @@ if command -v npx >/dev/null 2>&1; then
   npx -y skills@latest add "https://github.com/$REPO" --skill whatsapp --global -y >/dev/null 2>&1 || true
 fi
 
-echo ""
 echo "next steps:"
 echo "  claude mcp add whatsapp -- whatsapp-mcp stdio"
 echo "  # then call the auth_status tool (or run: whatsapp-mcp status) and scan the QR"

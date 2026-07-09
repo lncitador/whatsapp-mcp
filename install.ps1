@@ -5,9 +5,9 @@ $ErrorActionPreference = "Stop"
 $Repo = "lncitador/whatsapp-mcp"
 $BinDir = "$env:LOCALAPPDATA\whatsapp-mcp\bin"
 
-# Resolve latest release tag
-$release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "whatsapp-mcp-installer" }
-$tag = $release.tag_name
+# Resolve latest release tag via redirect (no API rate limit)
+$resp = Invoke-WebRequest -Uri "https://github.com/$Repo/releases/latest" -MaximumRedirection 0 -ErrorAction SilentlyContinue -UseBasicParsing
+$tag = ($resp.Headers.Location -split '/')[-1]
 $version = $tag -replace '^v', ''
 
 # Download ZIP

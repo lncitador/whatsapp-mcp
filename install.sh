@@ -17,7 +17,7 @@ case "$os" in
   *) echo "unsupported OS: $os (Windows: download from https://github.com/$REPO/releases)" >&2; exit 1 ;;
 esac
 
-tag=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" | awk -F/ '{print $NF}')
+tag=$(curl -fsSL -A "whatsapp-mcp-installer" -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" | awk -F/ '{print $NF}')
 [ -n "$tag" ] || { echo "could not resolve latest release" >&2; exit 1; }
 version=${tag#v}
 
@@ -25,7 +25,7 @@ url="https://github.com/$REPO/releases/download/$tag/whatsapp-mcp_${version}_${o
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 echo "downloading whatsapp-mcp $tag ($os/$arch)..."
-curl -fsSL "$url" -o "$tmp/wmcp.tar.gz"
+curl -fsSL -A "whatsapp-mcp-installer" "$url" -o "$tmp/wmcp.tar.gz"
 tar -xzf "$tmp/wmcp.tar.gz" -C "$tmp"
 
 dest="$HOME/.local/bin"

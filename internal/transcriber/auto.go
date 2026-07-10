@@ -3,6 +3,7 @@ package transcriber
 import (
 	"os"
 	"os/exec"
+	"strings"
 )
 
 func New() Transcriber {
@@ -24,13 +25,8 @@ func New() Transcriber {
 }
 
 func IsVideo(mediaPath string) bool {
-	ext := map[string]bool{
-		".mp4": true, ".avi": true, ".mov": true,
-		".mkv": true, ".webm": true, ".flv": true,
-	}
-
-	for e := range ext {
-		if len(mediaPath) > len(e) && mediaPath[len(mediaPath)-len(e):] == e {
+	for _, ext := range []string{".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv"} {
+		if strings.HasSuffix(strings.ToLower(mediaPath), ext) {
 			return true
 		}
 	}

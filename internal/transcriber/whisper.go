@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -83,6 +84,7 @@ func (w *WhisperCLI) Transcribe(mediaPath string) (*Result, error) {
 		})
 		result.Text += seg.Text + " "
 	}
+	result.Text = strings.TrimSpace(result.Text)
 
 	return result, nil
 }

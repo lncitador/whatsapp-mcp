@@ -34,6 +34,7 @@ type rpcArgs struct {
 	Participants       []string `json:"participants"`
 	IsCommunity        bool     `json:"is_community"`
 	CommunityParentJID string   `json:"community_parent_jid"`
+	ForceReprocess     bool     `json:"force_reprocess"`
 }
 
 func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
@@ -195,6 +196,13 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		respond(w, map[string]any{"success": true}, nil)
+	case "transcribe_media":
+		if a.MessageID == "" || a.ChatJID == "" {
+			writeError(w, 400, "message_id and chat_jid are required")
+			return
+		}
+		res, err := s.deps.WA.TranscribeMedia(a.MessageID, a.ChatJID, a.ForceReprocess)
+		respond(w, res, err)
 	default:
 		writeError(w, 404, "unknown tool: "+tool)
 	}

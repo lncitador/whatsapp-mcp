@@ -30,7 +30,12 @@ func GenerateMarkdown(result *Result, mediaType string, timestamp time.Time) (st
 
 	content := sb.String()
 
-	tmpFile, err := os.CreateTemp("", "transcript-*.md")
+	storeDir := filepath.Join(os.Getenv("HOME"), ".whatsapp-mcp", "store", "transcripts")
+	if err := os.MkdirAll(storeDir, 0755); err != nil {
+		return content, "", err
+	}
+
+	tmpFile, err := os.CreateTemp(storeDir, "transcript-*.md")
 	if err != nil {
 		return content, "", err
 	}

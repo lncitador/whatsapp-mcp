@@ -22,6 +22,7 @@ type WA interface {
 	Status() wa.Status
 	SendMessage(recipient, message, mediaPath, replyToMessageID, replyToSenderJID string) (bool, string)
 	DownloadMedia(messageID, chatJID string) (path, mediaType, filename string, err error)
+	TranscribeMedia(messageID, chatJID string, forceReprocess bool) (any, error)
 	CreateGroup(name string, participants []string, isCommunity bool, communityParentJID string) (string, error)
 	LeaveGroup(jid string) error
 }

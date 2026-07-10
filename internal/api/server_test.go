@@ -31,6 +31,9 @@ func (f *fakeWA) CreateGroup(name string, participants []string, isCommunity boo
 func (f *fakeWA) LeaveGroup(jid string) error {
 	return nil
 }
+func (f *fakeWA) TranscribeMedia(messageID, chatJID string, forceReprocess bool) (any, error) {
+	return map[string]any{"success": true, "text": "test transcription"}, nil
+}
 
 func newTestServer(t *testing.T) (*httptest.Server, *fakeWA, *store.Store) {
 	t.Helper()

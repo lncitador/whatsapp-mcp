@@ -83,6 +83,12 @@ type downloadMediaIn struct {
 	ChatJID   string `json:"chat_jid" jsonschema:"JID of the chat containing the message"`
 }
 
+type transcribeMediaIn struct {
+	MessageID      string `json:"message_id" jsonschema:"ID of the message containing media"`
+	ChatJID        string `json:"chat_jid" jsonschema:"JID of the chat containing the message"`
+	ForceReprocess bool   `json:"force_reprocess,omitempty" jsonschema:"re-transcribe even if already done"`
+}
+
 type createGroupIn struct {
 	Name               string   `json:"name" jsonschema:"group name (max 25 chars)"`
 	Participants       []string `json:"participants" jsonschema:"list of phone numbers or JIDs to add"`
@@ -157,4 +163,7 @@ func registerTools(s *mcp.Server, baseURL string) {
 	mcp.AddTool(s, &mcp.Tool{Name: "leave_group",
 		Description: "Leave a WhatsApp group. Other members will continue to see the group."},
 		forward[leaveGroupIn](baseURL, "leave_group"))
+	mcp.AddTool(s, &mcp.Tool{Name: "transcribe_media",
+		Description: "Transcribe audio/video message to text. For videos, extracts frames at segment timestamps. Returns transcription text, segments, frame paths, and markdown content."},
+		forward[transcribeMediaIn](baseURL, "transcribe_media"))
 }

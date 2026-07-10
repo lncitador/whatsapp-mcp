@@ -45,6 +45,18 @@ func runStatus() error {
 	return nil
 }
 
+func runStart() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err := daemonctl.EnsureRunning(exe); err != nil {
+		return err
+	}
+	fmt.Printf("daemon: running (%s)\n", config.BaseURL())
+	return nil
+}
+
 func runStop() error {
 	base := config.BaseURL()
 	if !daemonctl.Healthy(base) {

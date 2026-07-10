@@ -84,8 +84,9 @@ This MCP server implements several mitigations against the
   files under `~/.whatsapp-mcp/`. Path traversal attempts are blocked.
 - **Rate limiting**: Each tool is limited to 10 requests per minute.
 - **Human approval gate**: `send_message`, `send_file`, and
-  `send_audio_message` require explicit approval via `/api/approve/{id}`
-  before messages are actually sent.
+  `send_audio_message` return `pending_approval` with a `request_id`; nothing
+  is sent until a second explicit step — the `approve_send` MCP tool or
+  `POST /api/approve/{id}` — confirms it.
 - **Audit logging**: All tool invocations are logged to
   `~/.whatsapp-mcp/logs/audit.log`.
 - **Query limits**: `list_messages` is capped at 100 results per request.

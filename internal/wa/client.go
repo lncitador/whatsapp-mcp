@@ -87,6 +87,12 @@ func New(st *store.Store) (*Client, error) {
 			c.handleMessage(v)
 		case *events.HistorySync:
 			c.handleHistorySync(v)
+		case *events.OfflineSyncPreview:
+			c.logger.Infof("Offline sync preview: %d total (%d messages, %d notifications, %d receipts)",
+				v.Total, v.Messages, v.Notifications, v.Receipts)
+		case *events.OfflineSyncCompleted:
+			c.logger.Infof("Offline sync completed: %d events processed", v.Count)
+			go c.requestHistorySyncForRecentChats()
 		case *events.Connected:
 			c.setState(AuthConnected, "", "")
 		case *events.Disconnected:
@@ -205,4 +211,41 @@ func (c *Client) LeaveGroup(jid string) error {
 	}
 
 	return c.wm.LeaveGroup(context.Background(), groupJID)
+}
+
+func (c *Client) requestHistorySyncForRecentChats() {
+	chats, err := c.st.ListChats("", 10, 0, false, "")
+	if err != nil {
+		c.logger.Warnf("Failed to list chats for history sync: %v", err)
+		return
+	}
+
+	for _, chat := range chats {
+		lastMsg, err := c.st.GetLastMessageForChat(chat.JID)
+		if err != nil || lastMsg == nil {
+			continue
+		}
+
+		jid, err := types.ParseJID(chat.JID)
+		if err != nil {
+			continue
+		}
+
+		msgInfo := &types.MessageInfo{
+			MessageSource: types.MessageSource{
+				Chat:     jid,
+				IsFromMe: lastMsg.IsFromMe,
+			},
+			ID:        types.MessageID(lastMsg.ID),
+			Timestamp: lastMsg.Timestamp,
+		}
+
+		req := c.wm.BuildHistorySyncRequest(msgInfo, 50)
+		_, err = c.wm.SendPeerMessage(context.Background(), req)
+		if err != nil {
+			c.logger.Warnf("Failed to request history sync for %s: %v", chat.JID, err)
+		} else {
+			c.logger.Infof("Requested on-demand history sync for %s (last msg: %s)", chat.JID, lastMsg.ID)
+		}
+	}
 }

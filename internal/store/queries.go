@@ -279,6 +279,21 @@ func (s *Store) GetContactChats(jid string, limit, page int) ([]Chat, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) GetLastMessageForChat(chatJID string) (*Message, error) {
+	row := s.db.QueryRow(
+		"SELECT "+messageCols+" FROM messages JOIN chats ON messages.chat_jid = chats.jid"+
+			" WHERE messages.chat_jid = ? ORDER BY messages.timestamp DESC LIMIT 1",
+		chatJID)
+	m, err := scanMessage(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
 func (s *Store) GetLastInteraction(jid string) (*Message, error) {
 	row := s.db.QueryRow(
 		"SELECT "+messageCols+" FROM messages JOIN chats ON messages.chat_jid = chats.jid"+

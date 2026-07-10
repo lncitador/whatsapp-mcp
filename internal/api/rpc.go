@@ -135,14 +135,10 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reqID := s.approvals.Create("send_message", a.Recipient, a.Message, "")
-		respond(w, map[string]any{
-			"success":           false,
-			"status":            "pending_approval",
-			"request_id":        reqID,
-			"message":           "Send requires approval. Call /api/approve/" + reqID + " to confirm or /api/reject/" + reqID + " to cancel.",
-			"reply_to_message_id": a.ReplyToMessageID,
-			"reply_to_sender_jid": a.ReplyToSenderJID,
-		}, nil)
+		res := pendingApproval(reqID)
+		res["reply_to_message_id"] = a.ReplyToMessageID
+		res["reply_to_sender_jid"] = a.ReplyToSenderJID
+		respond(w, res, nil)
 	case "send_file":
 		if a.Recipient == "" || a.MediaPath == "" {
 			writeError(w, 400, "recipient and media_path must be provided")
@@ -154,12 +150,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reqID := s.approvals.Create("send_file", a.Recipient, "", cleanPath)
-		respond(w, map[string]any{
-			"success":    false,
-			"status":     "pending_approval",
-			"request_id": reqID,
-			"message":    "Send requires approval. Call /api/approve/" + reqID + " to confirm or /api/reject/" + reqID + " to cancel.",
-		}, nil)
+		respond(w, pendingApproval(reqID), nil)
 	case "send_audio_message":
 		if a.Recipient == "" || a.MediaPath == "" {
 			writeError(w, 400, "recipient and media_path must be provided")
@@ -171,12 +162,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reqID := s.approvals.Create("send_audio_message", a.Recipient, "", cleanPath)
-		respond(w, map[string]any{
-			"success":    false,
-			"status":     "pending_approval",
-			"request_id": reqID,
-			"message":    "Send requires approval. Call /api/approve/" + reqID + " to confirm or /api/reject/" + reqID + " to cancel.",
-		}, nil)
+		respond(w, pendingApproval(reqID), nil)
 	case "download_media":
 		path, mediaType, filename, err := s.deps.WA.DownloadMedia(a.MessageID, a.ChatJID)
 		if err != nil {
@@ -211,6 +197,17 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		respond(w, map[string]any{"success": true}, nil)
 	default:
 		writeError(w, 404, "unknown tool: "+tool)
+	}
+}
+
+func pendingApproval(reqID string) map[string]any {
+	return map[string]any{
+		"success":    false,
+		"status":     "pending_approval",
+		"request_id": reqID,
+		"message": "Send requires approval. Confirm with the user, then call the " +
+			"approve_send tool with this request_id (or reject_send to cancel). " +
+			"Without MCP: POST " + config.BaseURL() + "/api/approve/" + reqID + ".",
 	}
 }
 

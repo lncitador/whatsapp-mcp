@@ -24,6 +24,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "stdio:", err)
 			os.Exit(1)
 		}
+	case "start":
+		if err := runStart(); err != nil {
+			fmt.Fprintln(os.Stderr, "start:", err)
+			os.Exit(1)
+		}
 	case "status":
 		if err := runStatus(); err != nil {
 			fmt.Fprintln(os.Stderr, "status:", err)
@@ -46,7 +51,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: whatsapp-mcp <command>
 
 commands:
-  serve    run the WhatsApp daemon (session + local HTTP API)
+  serve    run the WhatsApp daemon in the foreground (session + local HTTP API)
+  start    start the daemon in the background and wait until it is healthy
   stdio    run the MCP stdio proxy (spawned by MCP clients; auto-starts serve)
   status   show daemon/connection status
   stop     stop the daemon

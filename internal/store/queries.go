@@ -7,6 +7,17 @@ import (
 	"time"
 )
 
+type Transcription struct {
+	MessageID    string    `json:"message_id"`
+	ChatJID      string    `json:"chat_jid"`
+	MediaType    string    `json:"media_type"`
+	Text         string    `json:"text"`
+	Segments     string    `json:"segments,omitempty"`
+	FramesDir    string    `json:"frames_dir,omitempty"`
+	MarkdownPath string    `json:"markdown_path,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 type Message struct {
 	Timestamp  time.Time `json:"timestamp"`
 	Sender     string    `json:"sender"`
@@ -335,4 +346,28 @@ func (s *Store) ChatName(jid string) string {
 		return ""
 	}
 	return name
+}
+
+func (s *Store) StoreTranscription(t Transcription) error {
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO transcriptions 
+		(message_id, chat_jid, media_type, text, segments, frames_dir, markdown_path)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		t.MessageID, t.ChatJID, t.MediaType, t.Text, t.Segments, t.FramesDir, t.MarkdownPath)
+	return err
+}
+
+func (s *Store) GetTranscription(messageID, chatJID string) (*Transcription, error) {
+	var t Transcription
+	err := s.db.QueryRow(
+		"SELECT message_id, chat_jid, media_type, text, IFNULL(segments,''), IFNULL(frames_dir,''), IFNULL(markdown_path,''), created_at FROM transcriptions WHERE message_id = ? AND chat_jid = ?",
+		messageID, chatJID,
+	).Scan(&t.MessageID, &t.ChatJID, &t.MediaType, &t.Text, &t.Segments, &t.FramesDir, &t.MarkdownPath, &t.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
 }

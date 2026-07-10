@@ -75,6 +75,17 @@ func Open() (*Store, error) {
 		CREATE INDEX IF NOT EXISTS idx_messages_sender_time ON messages(sender, timestamp DESC);
 		CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC);
 		CREATE INDEX IF NOT EXISTS idx_chats_last_message ON chats(last_message_time DESC);
+		CREATE TABLE IF NOT EXISTS transcriptions (
+			message_id TEXT PRIMARY KEY,
+			chat_jid TEXT NOT NULL,
+			media_type TEXT NOT NULL,
+			text TEXT NOT NULL,
+			segments TEXT,
+			frames_dir TEXT,
+			markdown_path TEXT,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (message_id, chat_jid) REFERENCES messages(id, chat_jid)
+		);
 	`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create tables: %w", err)

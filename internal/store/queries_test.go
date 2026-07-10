@@ -154,3 +154,44 @@ func TestChatsWithoutLastMessage(t *testing.T) {
 		t.Fatalf("c=%+v err=%v", c, err)
 	}
 }
+
+func TestTranscriptionRoundTrip(t *testing.T) {
+	s := seed(t)
+	tr := Transcription{
+		MessageID:    "A1",
+		ChatJID:      "5511999999999@s.whatsapp.net",
+		MediaType:    "audio",
+		Text:         "olá mundo",
+		Segments:     `[{"start":0,"end":1,"text":"olá"}]`,
+		FramesDir:    "/tmp/frames",
+		MarkdownPath: "/tmp/out.md",
+	}
+	if err := s.StoreTranscription(tr); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetTranscription("A1", "5511999999999@s.whatsapp.net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("expected transcription, got nil")
+	}
+	if got.Text != "olá mundo" || got.MediaType != "audio" || got.Segments != tr.Segments {
+		t.Fatalf("got %+v", got)
+	}
+	if got.FramesDir != "/tmp/frames" || got.MarkdownPath != "/tmp/out.md" {
+		t.Fatalf("got FramesDir=%q MarkdownPath=%q", got.FramesDir, got.MarkdownPath)
+	}
+	if got.CreatedAt.IsZero() {
+		t.Fatal("expected non-zero CreatedAt")
+	}
+
+	got, err = s.GetTranscription("NOPE", "x@s.whatsapp.net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil for missing transcription, got %+v", got)
+	}
+}

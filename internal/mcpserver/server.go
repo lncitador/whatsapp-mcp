@@ -37,6 +37,28 @@ func callRPC(baseURL, tool string, args any) (string, error) {
 	return string(out.Result), nil
 }
 
+func callApproval(baseURL, action, requestID string) (string, error) {
+	if requestID == "" {
+		return "", fmt.Errorf("request_id is required")
+	}
+	resp, err := httpClient.Post(baseURL+"/api/"+action+"/"+requestID, "application/json", nil)
+	if err != nil {
+		return "", fmt.Errorf("daemon unreachable (%v) — run `whatsapp-mcp status` to diagnose", err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Result json.RawMessage `json:"result"`
+		Error  string          `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("bad daemon response: %v", err)
+	}
+	if out.Error != "" {
+		return "", fmt.Errorf("%s", out.Error)
+	}
+	return string(out.Result), nil
+}
+
 func fetchStatus(baseURL string) (state, qr, message string, err error) {
 	resp, err := httpClient.Get(baseURL + "/status")
 	if err != nil {
@@ -64,6 +86,11 @@ Typical flow:
 1. search_contacts(query: "name or number") -> pick the contact's JID
 2. list_messages(chat_jid: ...) or get_direct_chat_by_contact(phone) for history
 3. send_message(recipient: JID or phone) to reply
+
+Sending is two-step: send_message/send_file/send_audio_message return
+status "pending_approval" with a request_id. Show the draft to the user,
+and only after they confirm call approve_send(request_id) — never approve
+without asking. Use reject_send to cancel.
 
 If several contacts match, ask the user which one before sending anything.
 If a tool reports the session is logged out, call auth_status to get a QR code.`

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/lncitador/whatsapp-mcp/internal/config"
 )
 
 func GenerateMarkdown(result *Result, mediaType string, timestamp time.Time) (string, string, error) {
@@ -13,6 +15,11 @@ func GenerateMarkdown(result *Result, mediaType string, timestamp time.Time) (st
 
 	sb.WriteString(fmt.Sprintf("# Transcrição - %s\n\n", timestamp.Format("2006-01-02 15:04:05")))
 	sb.WriteString(fmt.Sprintf("**Tipo:** %s\n\n", mediaType))
+
+	if len(result.Segments) > 0 {
+		last := result.Segments[len(result.Segments)-1]
+		sb.WriteString(fmt.Sprintf("**Duração:** %s\n\n", formatDuration(last.End)))
+	}
 
 	sb.WriteString("## Transcrição\n\n")
 	for _, seg := range result.Segments {
@@ -30,7 +37,7 @@ func GenerateMarkdown(result *Result, mediaType string, timestamp time.Time) (st
 
 	content := sb.String()
 
-	storeDir := filepath.Join(os.Getenv("HOME"), ".whatsapp-mcp", "store", "transcripts")
+	storeDir := filepath.Join(config.StoreDir(), "transcripts")
 	if err := os.MkdirAll(storeDir, 0755); err != nil {
 		return content, "", err
 	}

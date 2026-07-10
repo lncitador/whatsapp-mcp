@@ -110,13 +110,9 @@ func (c *Client) handleMessage(msg *events.Message) {
 		}
 
 		if mediaType == "audio" || mediaType == "video" {
-			go c.transcribeMessage(msg.Info.ID, chatJID, mediaType, url)
+			go c.transcribeMessageWithForce(msg.Info.ID, chatJID, mediaType, false)
 		}
 	}
-}
-
-func (c *Client) transcribeMessage(messageID, chatJID, mediaType, mediaURL string) {
-	c.transcribeMessageWithForce(messageID, chatJID, mediaType, false)
 }
 
 func (c *Client) TranscribeMedia(messageID, chatJID string, forceReprocess bool) (any, error) {
@@ -217,7 +213,11 @@ func (c *Client) transcribeMessageWithForce(messageID, chatJID, mediaType string
 		MarkdownPath: mdPath,
 	})
 
-	c.logger.Infof("Transcribed message %s: %s", messageID, result.Text[:min(50, len(result.Text))])
+	if result.Text != "" {
+		c.logger.Infof("Transcribed message %s: %s", messageID, result.Text[:min(50, len(result.Text))])
+	} else {
+		c.logger.Infof("Transcribed message %s: (empty)", messageID)
+	}
 }
 
 func (c *Client) chatName(jid types.JID, chatJID string, conversation any, sender string) string {

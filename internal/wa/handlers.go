@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -110,88 +111,82 @@ func (c *Client) handleMessage(msg *events.Message) {
 		}
 
 		if mediaType == "audio" || mediaType == "video" {
-			go c.transcribeMessageWithForce(msg.Info.ID, chatJID, mediaType, false)
+			go c.transcribeMessage(msg.Info.ID, chatJID, mediaType)
 		}
 	}
 }
 
 func (c *Client) TranscribeMedia(messageID, chatJID string, forceReprocess bool) (any, error) {
-	tr := transcriber.New()
-	if tr == nil {
-		return nil, fmt.Errorf("no transcriber available (install whisper-cli or set OPENAI_API_KEY)")
-	}
-
 	existing, _ := c.st.GetTranscription(messageID, chatJID)
 	if existing != nil && !forceReprocess {
+		var mdContent string
+		if existing.MarkdownPath != "" {
+			data, err := os.ReadFile(existing.MarkdownPath)
+			if err == nil {
+				mdContent = string(data)
+			}
+		}
 		return map[string]any{
-			"success":         true,
-			"already_done":    true,
-			"text":            existing.Text,
-			"markdown_path":   existing.MarkdownPath,
-			"message_id":      messageID,
-			"chat_jid":        chatJID,
+			"success":          true,
+			"already_done":     true,
+			"text":             existing.Text,
+			"markdown_path":    existing.MarkdownPath,
+			"markdown_content": mdContent,
+			"message_id":       messageID,
+			"chat_jid":         chatJID,
 		}, nil
 	}
 
-	localPath, mediaType, _, err := c.DownloadMedia(messageID, chatJID)
+	tr, mdContent, err := c.doTranscribe(messageID, chatJID, "", forceReprocess)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download media: %v", err)
+		return nil, err
 	}
-
-	result, err := tr.Transcribe(localPath)
-	if err != nil {
-		return nil, fmt.Errorf("transcription failed: %v", err)
-	}
-
-	var framesDir string
-	if mediaType == "video" && transcriber.IsVideo(localPath) {
-		framesDir = filepath.Join(config.StoreDir(), "transcripts", messageID)
-		result.Frames, _ = transcriber.ExtractFrames(localPath, result.Segments, framesDir)
-	}
-
-	_, mdPath, _ := transcriber.GenerateMarkdown(result, mediaType, time.Now())
-
-	jsonSegments, _ := json.Marshal(result.Segments)
-	c.st.StoreTranscription(store.Transcription{
-		MessageID:    messageID,
-		ChatJID:      chatJID,
-		MediaType:    mediaType,
-		Text:         result.Text,
-		Segments:     string(jsonSegments),
-		FramesDir:    framesDir,
-		MarkdownPath: mdPath,
-	})
 
 	return map[string]any{
-		"success":       true,
-		"text":          result.Text,
-		"markdown_path": mdPath,
-		"message_id":    messageID,
-		"chat_jid":      chatJID,
+		"success":          true,
+		"text":             tr.Text,
+		"markdown_path":    tr.MarkdownPath,
+		"markdown_content": mdContent,
+		"message_id":       messageID,
+		"chat_jid":         chatJID,
 	}, nil
 }
 
-func (c *Client) transcribeMessageWithForce(messageID, chatJID, mediaType string, forceReprocess bool) {
+func (c *Client) transcribeMessage(messageID, chatJID, mediaType string) {
+	c.doTranscribe(messageID, chatJID, mediaType, false)
+}
+
+type transcriptionOutput struct {
+	Text         string
+	MarkdownPath string
+}
+
+func (c *Client) doTranscribe(messageID, chatJID, mediaType string, force bool) (*transcriptionOutput, string, error) {
 	tr := transcriber.New()
 	if tr == nil {
-		return
+		return nil, "", fmt.Errorf("no transcriber available (install whisper-cli or set OPENAI_API_KEY)")
 	}
 
-	existing, _ := c.st.GetTranscription(messageID, chatJID)
-	if existing != nil && !forceReprocess {
-		return
+	if !force {
+		existing, _ := c.st.GetTranscription(messageID, chatJID)
+		if existing != nil {
+			return &transcriptionOutput{Text: existing.Text, MarkdownPath: existing.MarkdownPath}, "", nil
+		}
 	}
 
-	localPath, _, _, err := c.DownloadMedia(messageID, chatJID)
+	localPath, downloadedType, _, err := c.DownloadMedia(messageID, chatJID)
 	if err != nil {
 		c.logger.Warnf("Failed to download media for transcription %s: %v", messageID, err)
-		return
+		return nil, "", fmt.Errorf("failed to download media: %v", err)
+	}
+	if mediaType == "" {
+		mediaType = downloadedType
 	}
 
 	result, err := tr.Transcribe(localPath)
 	if err != nil {
 		c.logger.Warnf("Transcription failed for %s: %v", messageID, err)
-		return
+		return nil, "", fmt.Errorf("transcription failed: %v", err)
 	}
 
 	var framesDir string
@@ -200,10 +195,10 @@ func (c *Client) transcribeMessageWithForce(messageID, chatJID, mediaType string
 		result.Frames, _ = transcriber.ExtractFrames(localPath, result.Segments, framesDir)
 	}
 
-	_, mdPath, _ := transcriber.GenerateMarkdown(result, mediaType, time.Now())
+	mdContent, mdPath, _ := transcriber.GenerateMarkdown(result, mediaType, time.Now())
 
 	jsonSegments, _ := json.Marshal(result.Segments)
-	c.st.StoreTranscription(store.Transcription{
+	if err := c.st.StoreTranscription(store.Transcription{
 		MessageID:    messageID,
 		ChatJID:      chatJID,
 		MediaType:    mediaType,
@@ -211,13 +206,17 @@ func (c *Client) transcribeMessageWithForce(messageID, chatJID, mediaType string
 		Segments:     string(jsonSegments),
 		FramesDir:    framesDir,
 		MarkdownPath: mdPath,
-	})
+	}); err != nil {
+		c.logger.Warnf("Failed to store transcription for %s: %v", messageID, err)
+	}
 
 	if result.Text != "" {
 		c.logger.Infof("Transcribed message %s: %s", messageID, result.Text[:min(50, len(result.Text))])
 	} else {
 		c.logger.Infof("Transcribed message %s: (empty)", messageID)
 	}
+
+	return &transcriptionOutput{Text: result.Text, MarkdownPath: mdPath}, mdContent, nil
 }
 
 func (c *Client) chatName(jid types.JID, chatJID string, conversation any, sender string) string {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -48,6 +49,41 @@ func (o *OpenAITranscriber) Transcribe(mediaPath string) (*Result, error) {
 		return nil, fmt.Errorf("media file not found: %s", mediaPath)
 	}
 
+	chunks, err := ChunkAudio(mediaPath, 5*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("failed to chunk audio: %v", err)
+	}
+	if len(chunks) > 1 {
+		defer CleanupChunks(chunks)
+	}
+
+	result := &Result{}
+	var offset time.Duration
+
+	for _, chunk := range chunks {
+		r, err := o.transcribeChunk(chunk)
+		if err != nil {
+			return nil, err
+		}
+		result.Text += r.Text + " "
+		for _, seg := range r.Segments {
+			adjusted := Segment{
+				Start: seg.Start + offset,
+				End:   seg.End + offset,
+				Text:  seg.Text,
+			}
+			result.Segments = append(result.Segments, adjusted)
+		}
+		if len(r.Segments) > 0 {
+			offset = r.Segments[len(r.Segments)-1].End + offset
+		}
+	}
+	result.Text = strings.TrimSpace(result.Text)
+
+	return result, nil
+}
+
+func (o *OpenAITranscriber) transcribeChunk(mediaPath string) (*Result, error) {
 	file, err := os.Open(mediaPath)
 	if err != nil {
 		return nil, err

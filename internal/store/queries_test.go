@@ -99,6 +99,38 @@ func TestContactHelpers(t *testing.T) {
 	}
 }
 
+func TestGetLastMessageForChat(t *testing.T) {
+	s := seed(t)
+
+	msg, err := s.GetLastMessageForChat("5511999999999@s.whatsapp.net")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg == nil {
+		t.Fatal("expected message, got nil")
+	}
+	if msg.ID != "A2" {
+		t.Fatalf("expected A2, got %s", msg.ID)
+	}
+	if msg.Content != "olá Alice" {
+		t.Fatalf("expected 'olá Alice', got %s", msg.Content)
+	}
+}
+
+func TestGetLastMessageForChat_Empty(t *testing.T) {
+	s := openTestStore(t)
+	base := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+	s.StoreChat("empty@s.whatsapp.net", "Empty", base)
+
+	msg, err := s.GetLastMessageForChat("empty@s.whatsapp.net")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg != nil {
+		t.Fatalf("expected nil, got %+v", msg)
+	}
+}
+
 func TestChatsWithoutLastMessage(t *testing.T) {
 	s := seed(t)
 	chats, err := s.ListChats("", 20, 0, false, "last_active")

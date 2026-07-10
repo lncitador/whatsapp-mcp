@@ -87,6 +87,12 @@ func New(st *store.Store) (*Client, error) {
 			c.handleMessage(v)
 		case *events.HistorySync:
 			c.handleHistorySync(v)
+		case *events.OfflineSyncPreview:
+			c.logger.Infof("Offline sync preview: %d total (%d messages, %d notifications, %d receipts)",
+				v.Total, v.Messages, v.Notifications, v.Receipts)
+		case *events.OfflineSyncCompleted:
+			c.logger.Infof("Offline sync completed: %d events processed", v.Count)
+			go c.requestHistorySyncForRecentChats()
 		case *events.Connected:
 			c.setState(AuthConnected, "", "")
 		case *events.Disconnected:
@@ -205,4 +211,8 @@ func (c *Client) LeaveGroup(jid string) error {
 	}
 
 	return c.wm.LeaveGroup(context.Background(), groupJID)
+}
+
+func (c *Client) requestHistorySyncForRecentChats() {
+	// TODO: Implemented in Task 3
 }

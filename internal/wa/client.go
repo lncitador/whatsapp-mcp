@@ -214,5 +214,38 @@ func (c *Client) LeaveGroup(jid string) error {
 }
 
 func (c *Client) requestHistorySyncForRecentChats() {
-	// TODO: Implemented in Task 3
+	chats, err := c.st.ListChats("", 10, 0, false, "")
+	if err != nil {
+		c.logger.Warnf("Failed to list chats for history sync: %v", err)
+		return
+	}
+
+	for _, chat := range chats {
+		lastMsg, err := c.st.GetLastMessageForChat(chat.JID)
+		if err != nil || lastMsg == nil {
+			continue
+		}
+
+		jid, err := types.ParseJID(chat.JID)
+		if err != nil {
+			continue
+		}
+
+		msgInfo := &types.MessageInfo{
+			MessageSource: types.MessageSource{
+				Chat:     jid,
+				IsFromMe: lastMsg.IsFromMe,
+			},
+			ID:        types.MessageID(lastMsg.ID),
+			Timestamp: lastMsg.Timestamp,
+		}
+
+		req := c.wm.BuildHistorySyncRequest(msgInfo, 50)
+		_, err = c.wm.SendPeerMessage(context.Background(), req)
+		if err != nil {
+			c.logger.Warnf("Failed to request history sync for %s: %v", chat.JID, err)
+		} else {
+			c.logger.Infof("Requested on-demand history sync for %s (last msg: %s)", chat.JID, lastMsg.ID)
+		}
+	}
 }

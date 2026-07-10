@@ -2,7 +2,10 @@ package wa
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
@@ -11,7 +14,9 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 
+	"github.com/lncitador/whatsapp-mcp/internal/config"
 	"github.com/lncitador/whatsapp-mcp/internal/store"
+	"github.com/lncitador/whatsapp-mcp/internal/transcriber"
 )
 
 func extractTextContent(msg *waProto.Message) string {
@@ -104,7 +109,62 @@ func (c *Client) handleMessage(msg *events.Message) {
 		} else if content != "" {
 			c.logger.Infof("[%s] %s %s: %s", timestamp, direction, sender, content)
 		}
+
+		if mediaType == "audio" || mediaType == "video" {
+			go c.transcribeMessage(msg.Info.ID, chatJID, mediaType, url)
+		}
 	}
+}
+
+func (c *Client) transcribeMessage(messageID, chatJID, mediaType, mediaURL string) {
+	tr := transcriber.New()
+	if tr == nil {
+		return
+	}
+
+	existing, _ := c.st.GetTranscription(messageID, chatJID)
+	if existing != nil {
+		return
+	}
+
+	tmpFile, err := os.CreateTemp("", "media-*"+filepath.Ext(mediaURL))
+	if err != nil {
+		c.logger.Warnf("Failed to create temp file for transcription: %v", err)
+		return
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+
+	if mediaURL == "" {
+		return
+	}
+
+	result, err := tr.Transcribe(tmpFile.Name())
+	if err != nil {
+		c.logger.Warnf("Transcription failed for %s: %v", messageID, err)
+		return
+	}
+
+	var framesDir string
+	if mediaType == "video" && transcriber.IsVideo(tmpFile.Name()) {
+		framesDir = filepath.Join(config.StoreDir(), "transcripts", messageID)
+		result.Frames, _ = transcriber.ExtractFrames(tmpFile.Name(), result.Segments, framesDir)
+	}
+
+	_, mdPath, _ := transcriber.GenerateMarkdown(result, mediaType, time.Now())
+
+	jsonSegments, _ := json.Marshal(result.Segments)
+	c.st.StoreTranscription(store.Transcription{
+		MessageID:    messageID,
+		ChatJID:      chatJID,
+		MediaType:    mediaType,
+		Text:         result.Text,
+		Segments:     string(jsonSegments),
+		FramesDir:    framesDir,
+		MarkdownPath: mdPath,
+	})
+
+	c.logger.Infof("Transcribed message %s: %s", messageID, result.Text[:min(50, len(result.Text))])
 }
 
 func (c *Client) chatName(jid types.JID, chatJID string, conversation any, sender string) string {

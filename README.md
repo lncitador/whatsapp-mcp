@@ -39,6 +39,16 @@ leaves your machine except through the tools you call.
 
 Voice notes: converting non-.ogg audio requires `ffmpeg` on your PATH.
 
+Transcription (`transcribe_media`) also requires `ffmpeg` on your PATH, plus
+one of:
+- [whisper-cli](https://github.com/ggml-org/whisper.cpp) (whisper.cpp) —
+  local, no API key, tried first if installed.
+- `OPENAI_API_KEY` — falls back to OpenAI's hosted Whisper API if
+  whisper-cli isn't installed.
+
+If neither is available, `transcribe_media` returns an error; everything
+else works normally.
+
 ## Configuration
 
 Environment variables:
@@ -46,6 +56,10 @@ Environment variables:
 - `WHATSAPP_MCP_DIR` — Base directory (default: `~/.whatsapp-mcp`)
 - `WHATSAPP_MCP_PORT` — HTTP port (default: `8080`)
 - `WHATSAPP_MEDIA_ROOTS` — Allowed media directories for `send_file` (colon-separated). When set, `send_file` rejects paths outside these roots. Prevents CWE-22 path traversal.
+- `OPENAI_API_KEY` — Enables OpenAI Whisper API transcription when
+  whisper-cli isn't installed. See Transcription above.
+- `WHISPER_MODEL` — whisper.cpp model name (default: `base`). Only used when
+  whisper-cli is installed.
 
 ## How it works
 
@@ -60,7 +74,7 @@ received. `whatsapp-mcp status` / `stop` manage it.
 search_contacts, list_messages, list_chats, get_chat,
 get_direct_chat_by_contact, get_contact_chats, get_last_interaction,
 get_message_context, send_message, send_file, send_audio_message,
-download_media, create_group, leave_group, auth_status.
+download_media, transcribe_media, create_group, leave_group, auth_status.
 
 ### New Features (vs upstream)
 
@@ -69,6 +83,12 @@ download_media, create_group, leave_group, auth_status.
 - **Sender names**: `list_messages` and `list_chats` include resolved `sender_name` / `last_sender_name` fields
 - **LID normalization**: Automatic resolution of WhatsApp LID addresses to phone numbers
 - **FTS5 search**: Full-text search with ~500x speedup on selective queries
+- **Transcription**: `transcribe_media` converts voice notes and videos to
+  text (via whisper-cli or OpenAI's Whisper API — see Configuration), with
+  timestamped segments and a markdown export. Videos also get frame
+  extraction at segment timestamps. Voice notes and videos are transcribed
+  automatically in the background as they arrive, if a transcriber is
+  configured — see Security for what that means for your data.
 - **Security**: Path traversal protection (`WHATSAPP_MEDIA_ROOTS`), pagination caps
 - **Performance**: SQLite indexes on hot paths
 
@@ -97,6 +117,10 @@ This MCP server implements several mitigations against the
 - The approval gate is enforced server-side, but the MCP client (Claude) must
   be configured to present the approval request to the user rather than
   auto-approving.
+- If `OPENAI_API_KEY` is set (and whisper-cli isn't installed), every voice
+  note and video you receive is sent to OpenAI's API automatically in the
+  background for transcription — there is no per-message opt-out. Use
+  whisper-cli instead if you don't want audio leaving your machine.
 
 ## Development
 

@@ -14,8 +14,9 @@ import (
 )
 
 type OpenAITranscriber struct {
-	APIKey string
-	Model  string
+	APIKey  string
+	Model   string
+	BaseURL string // override for tests; defaults to the real API
 }
 
 type openaiSegment struct {
@@ -29,10 +30,13 @@ type openaiResponse struct {
 	Segments []openaiSegment `json:"segments,omitempty"`
 }
 
+const openAIDefaultBaseURL = "https://api.openai.com/v1"
+
 func NewOpenAITranscriber() *OpenAITranscriber {
 	return &OpenAITranscriber{
-		APIKey: os.Getenv("OPENAI_API_KEY"),
-		Model:  "whisper-1",
+		APIKey:  os.Getenv("OPENAI_API_KEY"),
+		Model:   "whisper-1",
+		BaseURL: openAIDefaultBaseURL,
 	}
 }
 
@@ -49,7 +53,13 @@ func (o *OpenAITranscriber) Transcribe(mediaPath string) (*Result, error) {
 		return nil, fmt.Errorf("media file not found: %s", mediaPath)
 	}
 
-	chunks, err := ChunkAudio(mediaPath, 5*time.Minute)
+	wavPath, err := NormalizeToWAV(mediaPath)
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(wavPath)
+
+	chunks, err := ChunkAudio(wavPath, 5*time.Minute)
 	if err != nil {
 		return nil, fmt.Errorf("failed to chunk audio: %v", err)
 	}
@@ -105,7 +115,11 @@ func (o *OpenAITranscriber) transcribeChunk(mediaPath string) (*Result, error) {
 	writer.WriteField("response_format", "verbose_json")
 	writer.Close()
 
-	req, err := http.NewRequest("POST", "https://api.openai.com/v1/audio/transcriptions", &buf)
+	baseURL := o.BaseURL
+	if baseURL == "" {
+		baseURL = openAIDefaultBaseURL
+	}
+	req, err := http.NewRequest("POST", baseURL+"/audio/transcriptions", &buf)
 	if err != nil {
 		return nil, err
 	}

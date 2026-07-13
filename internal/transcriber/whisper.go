@@ -43,7 +43,13 @@ func (w *WhisperCLI) Transcribe(mediaPath string) (*Result, error) {
 		return nil, fmt.Errorf("media file not found: %s", mediaPath)
 	}
 
-	chunks, err := ChunkAudio(mediaPath, 5*time.Minute)
+	wavPath, err := NormalizeToWAV(mediaPath)
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(wavPath)
+
+	chunks, err := ChunkAudio(wavPath, 5*time.Minute)
 	if err != nil {
 		return nil, fmt.Errorf("failed to chunk audio: %v", err)
 	}

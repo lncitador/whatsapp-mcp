@@ -2,6 +2,7 @@ package wa
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -36,21 +37,37 @@ func extractMediaInfo(msg *waProto.Message) (mediaType, filename, url string, me
 		return "", "", "", nil, nil, nil, 0
 	}
 	if img := msg.GetImageMessage(); img != nil {
-		return "image", "image_" + time.Now().Format("20060102_150405") + ".jpg",
+		sha := hex.EncodeToString(img.GetFileSHA256())
+		if len(sha) > 16 {
+			sha = sha[:16]
+		}
+		return "image", "image_" + sha + ".jpg",
 			img.GetURL(), img.GetMediaKey(), img.GetFileSHA256(), img.GetFileEncSHA256(), img.GetFileLength()
 	}
 	if vid := msg.GetVideoMessage(); vid != nil {
-		return "video", "video_" + time.Now().Format("20060102_150405") + ".mp4",
+		sha := hex.EncodeToString(vid.GetFileSHA256())
+		if len(sha) > 16 {
+			sha = sha[:16]
+		}
+		return "video", "video_" + sha + ".mp4",
 			vid.GetURL(), vid.GetMediaKey(), vid.GetFileSHA256(), vid.GetFileEncSHA256(), vid.GetFileLength()
 	}
 	if aud := msg.GetAudioMessage(); aud != nil {
-		return "audio", "audio_" + time.Now().Format("20060102_150405") + ".ogg",
+		sha := hex.EncodeToString(aud.GetFileSHA256())
+		if len(sha) > 16 {
+			sha = sha[:16]
+		}
+		return "audio", "audio_" + sha + ".ogg",
 			aud.GetURL(), aud.GetMediaKey(), aud.GetFileSHA256(), aud.GetFileEncSHA256(), aud.GetFileLength()
 	}
 	if doc := msg.GetDocumentMessage(); doc != nil {
 		fn := doc.GetFileName()
 		if fn == "" {
-			fn = "document_" + time.Now().Format("20060102_150405")
+			sha := hex.EncodeToString(doc.GetFileSHA256())
+			if len(sha) > 16 {
+				sha = sha[:16]
+			}
+			fn = "document_" + sha
 		}
 		return "document", fn,
 			doc.GetURL(), doc.GetMediaKey(), doc.GetFileSHA256(), doc.GetFileEncSHA256(), doc.GetFileLength()

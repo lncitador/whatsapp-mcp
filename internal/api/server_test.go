@@ -31,6 +31,9 @@ func (f *fakeWA) CreateGroup(name string, participants []string, isCommunity boo
 func (f *fakeWA) LeaveGroup(jid string) error {
 	return nil
 }
+func (f *fakeWA) RequestHistorySync(limit int) error {
+	return nil
+}
 func (f *fakeWA) TranscribeMedia(messageID, chatJID string, forceReprocess bool) (any, error) {
 	return map[string]any{"success": true, "text": "test transcription"}, nil
 }
@@ -44,7 +47,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *fakeWA, *store.Store) {
 	}
 	t.Cleanup(func() { st.Close() })
 	f := &fakeWA{}
-	s := New(Deps{Store: st, WA: f, Version: "test"})
+	s := New(Deps{Store: st, WA: f, Version: "test", RateLimitPerMin: 10})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	return ts, f, st

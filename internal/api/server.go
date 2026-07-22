@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ type WA interface {
 	TranscribeMedia(messageID, chatJID string, forceReprocess bool) (any, error)
 	CreateGroup(name string, participants []string, isCommunity bool, communityParentJID string) (string, error)
 	LeaveGroup(jid string) error
+	RequestHistorySync(limit int) error
 }
 
 type Deps struct {
@@ -32,6 +34,9 @@ type Deps struct {
 	WA         WA
 	Version    string
 	OnShutdown func()
+	// RateLimitPerMin caps per-tool RPC calls per minute. Defaults to 1000
+	// (headroom for MCP clients that poll) when zero.
+	RateLimitPerMin int
 }
 
 type pendingRequest struct {
@@ -108,10 +113,14 @@ type Server struct {
 }
 
 func New(deps Deps) *Server {
+	rateLimit := deps.RateLimitPerMin
+	if rateLimit <= 0 {
+		rateLimit = 1000
+	}
 	s := &Server{
 		deps:      deps,
 		mux:       http.NewServeMux(),
-		rateLim:   newRateLimiter(10, time.Minute),
+		rateLim:   newRateLimiter(rateLimit, time.Minute),
 		approvals: newApprovalSystem(),
 	}
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +134,19 @@ func New(deps Deps) *Server {
 		if deps.OnShutdown != nil {
 			go deps.OnShutdown()
 		}
+	})
+	s.mux.HandleFunc("POST /api/resync", func(w http.ResponseWriter, r *http.Request) {
+		limit := 10
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		if err := deps.WA.RequestHistorySync(limit); err != nil {
+			writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "limit": limit})
 	})
 	s.mux.HandleFunc("POST /api/approve/{request_id}", s.handleApprove)
 	s.mux.HandleFunc("POST /api/reject/{request_id}", s.handleReject)

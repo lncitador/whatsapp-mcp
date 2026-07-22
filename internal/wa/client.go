@@ -44,7 +44,15 @@ type Client struct {
 
 	mu     sync.RWMutex
 	status Status
+
+	resyncMu   sync.Mutex
+	lastResync time.Time
 }
+
+// autoResyncDebounce is the minimum gap between automatic history resyncs.
+// On a flaky link the daemon reconnects repeatedly (keepalive timeouts,
+// stream drops); without a debounce every reconnect would fire a resync.
+const autoResyncDebounce = 60 * time.Second
 
 func (c *Client) setState(s AuthState, qr, msg string) {
 	c.mu.Lock()
@@ -92,9 +100,14 @@ func New(st *store.Store) (*Client, error) {
 				v.Total, v.Messages, v.Notifications, v.Receipts)
 		case *events.OfflineSyncCompleted:
 			c.logger.Infof("Offline sync completed: %d events processed", v.Count)
-			go c.requestHistorySyncForRecentChats()
+			go c.autoResync("offline sync completed")
 		case *events.Connected:
 			c.setState(AuthConnected, "", "")
+			// OfflineSyncCompleted often never fires on a flaky link, so the
+			// offline backlog never drains and afternoon messages go missing
+			// until a manual daemon restart. Resync on every (re)connect too,
+			// debounced, so recovered messages are pulled once the net returns.
+			go c.autoResync("connected")
 		case *events.Disconnected:
 			c.setState(AuthConnecting, "", "disconnected, reconnecting")
 		case *events.LoggedOut:
@@ -213,11 +226,46 @@ func (c *Client) LeaveGroup(jid string) error {
 	return c.wm.LeaveGroup(context.Background(), groupJID)
 }
 
-func (c *Client) requestHistorySyncForRecentChats() {
-	chats, err := c.st.ListChats("", 10, 0, false, "")
-	if err != nil {
-		c.logger.Warnf("Failed to list chats for history sync: %v", err)
+// autoResync pulls recent history after a (re)connect, debounced so a
+// reconnect storm doesn't spam WhatsApp with sync requests. Waits a few
+// seconds first to let normal offline delivery try, then fills any gap.
+func (c *Client) autoResync(reason string) {
+	c.resyncMu.Lock()
+	since := time.Since(c.lastResync)
+	if since < autoResyncDebounce {
+		c.resyncMu.Unlock()
 		return
+	}
+	c.lastResync = time.Now()
+	c.resyncMu.Unlock()
+
+	time.Sleep(5 * time.Second)
+	if !c.wm.IsConnected() {
+		return
+	}
+	c.logger.Infof("Auto history resync (%s)", reason)
+	if err := c.RequestHistorySync(10); err != nil {
+		c.logger.Warnf("Auto history resync failed: %v", err)
+	}
+}
+
+// RequestHistorySync asks WhatsApp to redeliver recent history for the N
+// most recently active chats, anchored on each chat's last known message.
+// Normally triggered automatically on OfflineSyncCompleted, but that event
+// doesn't always fire on a flaky connection (repeated stream drops prevent
+// the offline-sync backlog from ever fully draining) — exposed here so it
+// can also be triggered on demand via POST /api/resync.
+func (c *Client) RequestHistorySync(limit int) error {
+	if !c.wm.IsConnected() {
+		return fmt.Errorf("not connected to WhatsApp")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	chats, err := c.st.ListChats("", limit, 0, false, "")
+	if err != nil {
+		return fmt.Errorf("list chats for history sync: %w", err)
 	}
 
 	for _, chat := range chats {
@@ -248,4 +296,6 @@ func (c *Client) requestHistorySyncForRecentChats() {
 			c.logger.Infof("Requested on-demand history sync for %s (last msg: %s)", chat.JID, lastMsg.ID)
 		}
 	}
+
+	return nil
 }

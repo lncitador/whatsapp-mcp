@@ -155,6 +155,110 @@ func TestChatsWithoutLastMessage(t *testing.T) {
 	}
 }
 
+func TestCountMessages(t *testing.T) {
+	s := seed(t)
+	n, err := s.CountMessages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("CountMessages = %d, want 3", n)
+	}
+
+	// Redelivered history must not inflate the delta: (id, chat_jid) is the PK
+	// and StoreMessage is an INSERT OR REPLACE.
+	base := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+	if err := s.StoreMessage(NewMessage{
+		ID: "A1", ChatJID: "5511999999999@s.whatsapp.net", Sender: "5511999999999",
+		Content: "oi", Timestamp: base,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.CountMessages(); n != 3 {
+		t.Fatalf("CountMessages after re-store = %d, want 3", n)
+	}
+
+	if err := s.StoreMessage(NewMessage{
+		ID: "A3", ChatJID: "5511999999999@s.whatsapp.net", Sender: "5511999999999",
+		Content: "nova", Timestamp: base.Add(4 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.CountMessages(); n != 4 {
+		t.Fatalf("CountMessages after new message = %d, want 4", n)
+	}
+}
+
+func TestListChatsForResync(t *testing.T) {
+	s := openTestStore(t)
+	now := time.Now()
+	chats := map[string]time.Time{
+		"recent1@s.whatsapp.net": now.Add(-1 * time.Hour),
+		"recent2@s.whatsapp.net": now.Add(-3 * time.Hour),
+		"window@s.whatsapp.net":  now.Add(-47 * time.Hour), // inside the 48h window
+		"stale@s.whatsapp.net":   now.Add(-40 * 24 * time.Hour),
+	}
+	for jid, ts := range chats {
+		if err := s.StoreChat(jid, jid, ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	jids := func(cs []Chat) map[string]bool {
+		out := map[string]bool{}
+		for _, c := range cs {
+			out[c.JID] = true
+		}
+		return out
+	}
+
+	// Top-1 by recency alone would only return recent1; the 48h window is what
+	// keeps chats that fell below the cut from being invisible forever.
+	got, err := s.ListChatsForResync(1, now.Add(-48*time.Hour), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := jids(got)
+	for _, want := range []string{"recent1@s.whatsapp.net", "recent2@s.whatsapp.net", "window@s.whatsapp.net"} {
+		if !set[want] {
+			t.Fatalf("%s missing from %v", want, set)
+		}
+	}
+	if set["stale@s.whatsapp.net"] {
+		t.Fatalf("stale chat should be out of the window: %v", set)
+	}
+	if got[0].JID != "recent1@s.whatsapp.net" {
+		t.Fatalf("want most recent first, got %+v", got[0])
+	}
+
+	// A big enough top-N slice reaches the stale chat as well.
+	got, err = s.ListChatsForResync(4, now.Add(-48*time.Hour), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 || !jids(got)["stale@s.whatsapp.net"] {
+		t.Fatalf("want all 4 chats, got %+v", got)
+	}
+
+	// maxChats caps the union so a reconnect can't turn into a flood.
+	got, err = s.ListChatsForResync(4, now.Add(-48*time.Hour), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 chats after cap, got %d", len(got))
+	}
+
+	// No duplicates when a chat satisfies both criteria.
+	got, err = s.ListChatsForResync(4, now.Add(-48*time.Hour), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jids(got)) != len(got) {
+		t.Fatalf("duplicate chats in %+v", got)
+	}
+}
+
 func TestTranscriptionRoundTrip(t *testing.T) {
 	s := seed(t)
 	tr := Transcription{

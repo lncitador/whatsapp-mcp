@@ -31,13 +31,13 @@ type Message struct {
 }
 
 type Chat struct {
-	JID              string     `json:"jid"`
-	Name             string     `json:"name,omitempty"`
-	LastMessageTime  *time.Time `json:"last_message_time,omitempty"`
-	LastMessage      string     `json:"last_message,omitempty"`
-	LastSender       string     `json:"last_sender,omitempty"`
-	LastSenderName   string     `json:"last_sender_name,omitempty"`
-	LastIsFromMe     bool       `json:"last_is_from_me,omitempty"`
+	JID             string     `json:"jid"`
+	Name            string     `json:"name,omitempty"`
+	LastMessageTime *time.Time `json:"last_message_time,omitempty"`
+	LastMessage     string     `json:"last_message,omitempty"`
+	LastSender      string     `json:"last_sender,omitempty"`
+	LastSenderName  string     `json:"last_sender_name,omitempty"`
+	LastIsFromMe    bool       `json:"last_is_from_me,omitempty"`
 }
 
 type MessageContext struct {
@@ -225,6 +225,60 @@ func (s *Store) ListChats(query string, limit, page int, includeLastMessage bool
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// ListChatsForResync picks the chats a history resync should ask about.
+//
+// Plain "top-N by last_message_time" (what ListChats does) is the wrong
+// criterion here and actively perpetuates the bug it is meant to fix: a chat
+// whose messages were never persisted keeps its OLD last_message_time, so it
+// never climbs the ranking and never enters the top-N — the gap hides itself.
+//
+// So the selection is a union of two criteria:
+//   - the recentLimit most recently active chats (the usual suspects), and
+//   - every chat active since activeSince (a 48h window catches chats that
+//     were talking yesterday but got pushed below the cut by busier ones).
+//
+// maxChats caps the union because each selected chat costs one peer message
+// to WhatsApp; an unbounded list would turn a reconnect into a flood.
+func (s *Store) ListChatsForResync(recentLimit int, activeSince time.Time, maxChats int) ([]Chat, error) {
+	if recentLimit <= 0 {
+		recentLimit = 20
+	}
+	if maxChats <= 0 {
+		maxChats = 50
+	}
+	rows, err := s.db.Query(
+		`SELECT c.jid, IFNULL(c.name,''), c.last_message_time, '', '', 0 FROM chats c
+		WHERE c.last_message_time >= ?
+		   OR c.jid IN (SELECT jid FROM chats ORDER BY last_message_time DESC LIMIT ?)
+		ORDER BY c.last_message_time DESC LIMIT ?`,
+		activeSince, recentLimit, maxChats)
+	if err != nil {
+		return nil, fmt.Errorf("list chats for resync: %w", err)
+	}
+	defer rows.Close()
+	var out []Chat
+	for rows.Next() {
+		c, err := scanChat(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan chat for resync: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// CountMessages returns the total number of stored messages. Used to measure
+// how many rows a history resync actually added: StoreMessage is an
+// INSERT OR REPLACE on (id, chat_jid), so redelivered messages don't inflate
+// the count and the delta is exactly the number of genuinely new messages.
+func (s *Store) CountMessages() (int64, error) {
+	var n int64
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM messages").Scan(&n); err != nil {
+		return 0, fmt.Errorf("count messages: %w", err)
+	}
+	return n, nil
 }
 
 func (s *Store) GetChat(chatJID string, includeLastMessage bool) (*Chat, error) {

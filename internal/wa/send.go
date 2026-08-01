@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
-	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow"
+	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/lncitador/whatsapp-mcp/internal/audio"
+	"github.com/lncitador/whatsapp-mcp/internal/store"
+	"github.com/lncitador/whatsapp-mcp/internal/stream"
 )
 
 func (c *Client) SendMessage(recipient, message, mediaPath, replyToMessageID, replyToSenderJID string) (bool, string) {
@@ -173,10 +176,68 @@ func (c *Client) SendMessage(recipient, message, mediaPath, replyToMessageID, re
 		}
 	}
 
-	_, err = c.wm.SendMessage(context.Background(), recipientJID, msg)
+	resp, err := c.wm.SendMessage(context.Background(), recipientJID, msg)
 	if err != nil {
 		return false, fmt.Sprintf("Error sending message: %v", err)
 	}
 
+	c.storeOutgoing(recipientJID, resp, msg)
+
 	return true, fmt.Sprintf("Message sent to %s", recipient)
+}
+
+// storeOutgoing records a message this daemon just sent. WhatsApp does not
+// echo a message back to the session that sent it, so handleMessage never
+// runs for our own sends — without this the local store and the /api/events
+// stream only ever see one side of a conversation.
+//
+// Failures here are logged, never returned: the message is already delivered,
+// and reporting a send as failed because the local copy did not persist would
+// invite a duplicate send.
+func (c *Client) storeOutgoing(recipient types.JID, resp whatsmeow.SendResponse, msg *waProto.Message) {
+	defer c.recoverPanic("store outgoing message")
+
+	chatJID := c.resolveToPN(recipient.String())
+	s, ok := describeMessage(msg)
+	if !ok {
+		c.logger.Warnf("Sent message %s to %s has no storable content", resp.ID, chatJID)
+		return
+	}
+
+	ts := resp.Timestamp
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	var sender string
+	if c.wm != nil && c.wm.Store != nil {
+		sender = c.wm.Store.GetJID().User
+	}
+
+	name := c.chatName(recipient, chatJID, nil, sender)
+	if err := c.st.StoreChat(chatJID, name, ts); err != nil {
+		c.logger.Warnf("Failed to store chat for sent message: %v", err)
+		return
+	}
+
+	if err := c.st.StoreMessage(store.NewMessage{
+		ID:            string(resp.ID),
+		ChatJID:       chatJID,
+		Sender:        sender,
+		Content:       s.content,
+		Timestamp:     ts,
+		IsFromMe:      true,
+		MediaType:     s.mediaType,
+		Filename:      s.filename,
+		URL:           s.url,
+		MediaKey:      s.mediaKey,
+		FileSHA256:    s.fileSHA256,
+		FileEncSHA256: s.fileEncSHA256,
+		FileLength:    s.fileLength,
+	}); err != nil {
+		c.logger.Warnf("Failed to store sent message %s: %v", resp.ID, err)
+		return
+	}
+
+	stream.PublishMessage(string(resp.ID), chatJID, name, sender, true, ts, s.content, s.mediaType, s.filename)
+	c.logger.Infof("[%s] → %s: %s", ts.Format("2006-01-02 15:04:05"), chatJID, s.content)
 }

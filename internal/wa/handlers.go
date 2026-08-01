@@ -534,9 +534,16 @@ func (c *Client) chatName(jid types.JID, chatJID string, conversation any, sende
 			}
 		}
 	} else {
-		contact, err := c.wm.Store.Contacts.GetContact(context.Background(), jid)
-		if err == nil && contact.FullName != "" {
-			name = contact.FullName
+		// The contact book is only consultable with a live session; fall back
+		// to the number rather than taking the daemon down with a nil deref.
+		var fullName string
+		if c.wm != nil && c.wm.Store != nil && c.wm.Store.Contacts != nil {
+			if contact, err := c.wm.Store.Contacts.GetContact(context.Background(), jid); err == nil {
+				fullName = contact.FullName
+			}
+		}
+		if fullName != "" {
+			name = fullName
 		} else if sender != "" {
 			name = sender
 		} else {

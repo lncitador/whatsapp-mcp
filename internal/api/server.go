@@ -148,6 +148,7 @@ func New(deps Deps) *Server {
 		}
 		writeJSON(w, 200, map[string]any{"ok": true, "limit": limit})
 	})
+	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	s.mux.HandleFunc("POST /api/approve/{request_id}", s.handleApprove)
 	s.mux.HandleFunc("POST /api/reject/{request_id}", s.handleReject)
 	s.mux.HandleFunc("POST /api/rpc/{tool}", s.rateLimitMiddleware(s.handleRPC))

@@ -76,6 +76,39 @@ get_direct_chat_by_contact, get_contact_chats, get_last_interaction,
 get_message_context, send_message, send_file, send_audio_message,
 download_media, transcribe_media, create_group, leave_group, auth_status.
 
+## Live message stream
+
+`GET /api/events` streams messages as they are received, as
+[Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events).
+It lets a client tail new messages without polling and without opening the
+SQLite store. Each message is emitted right after it is persisted, on both the
+live and history-sync paths.
+
+```sh
+curl -N http://127.0.0.1:8080/api/events
+```
+
+```
+event: message
+data: {"id":"MSG1","chat_jid":"5511999999999@s.whatsapp.net","chat_name":"Alice",
+       "sender":"5511999999999","sender_name":"Alice","is_from_me":false,
+       "timestamp":"2026-07-31T23:12:03Z","text":"hello there",
+       "media_type":"","filename":""}
+```
+
+Query filters (all optional): `chat_jid` restricts to one chat, `from_me=true|false`
+restricts direction, `include_media=false` skips messages carrying media. The
+stream sends a `:` comment every 15s as a keepalive, and is exempt from the
+per-tool rate limit so a long-lived connection is never cut.
+
+Slow consumers are dropped-oldest rather than allowed to stall the WhatsApp
+connection, so a client that stops reading loses events instead of blocking
+the daemon.
+
+Agents can use `skills/whatsapp/scripts/watch.sh`, which wraps this endpoint
+with reconnect-on-drop, a `--timeout`, and a compact one-line-per-message
+format — see `skills/whatsapp/SKILL.md`.
+
 ### New Features (vs upstream)
 
 - **Reply support**: `send_message` accepts `reply_to_message_id` and `reply_to_sender_jid` to quote-reply to specific messages
@@ -89,6 +122,8 @@ download_media, transcribe_media, create_group, leave_group, auth_status.
   extraction at segment timestamps. Voice notes and videos are transcribed
   automatically in the background as they arrive, if a transcriber is
   configured — see Security for what that means for your data.
+- **Live stream**: `GET /api/events` (SSE) pushes new messages to clients as
+  they arrive — see Live message stream above
 - **Security**: Path traversal protection (`WHATSAPP_MEDIA_ROOTS`), pagination caps
 - **Performance**: SQLite indexes on hot paths
 

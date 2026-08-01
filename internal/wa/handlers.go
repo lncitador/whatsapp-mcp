@@ -17,6 +17,7 @@ import (
 
 	"github.com/lncitador/whatsapp-mcp/internal/config"
 	"github.com/lncitador/whatsapp-mcp/internal/store"
+	"github.com/lncitador/whatsapp-mcp/internal/stream"
 	"github.com/lncitador/whatsapp-mcp/internal/transcriber"
 )
 
@@ -116,6 +117,8 @@ func (c *Client) handleMessage(msg *events.Message) {
 	if err != nil {
 		c.logger.Warnf("Failed to store message: %v", err)
 	} else {
+		stream.PublishMessage(msg.Info.ID, chatJID, name, sender, msg.Info.IsFromMe, msg.Info.Timestamp, content, mediaType, filename)
+
 		timestamp := msg.Info.Timestamp.Format("2006-01-02 15:04:05")
 		direction := "←"
 		if msg.Info.IsFromMe {
@@ -402,6 +405,8 @@ func (c *Client) handleHistorySync(hs *events.HistorySync) {
 					c.logger.Warnf("Failed to store history message: %v", err)
 				} else {
 					syncedCount++
+					stream.PublishMessage(msgID, chatJID, name, sender, isFromMe, timestamp, content, mediaType, filename)
+
 					if mediaType != "" {
 						c.logger.Infof("Stored message: [%s] %s -> %s: [%s: %s] %s",
 							timestamp.Format("2006-01-02 15:04:05"), sender, chatJID, mediaType, filename, content)

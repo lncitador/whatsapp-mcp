@@ -118,15 +118,20 @@ if [[ -n "$TIMEOUT" ]]; then DEADLINE=$(( $(date +%s) + TIMEOUT )); fi
 
 # jq program for the default compact line. Kept here so the no-jq path can
 # simply fall back to printing the raw JSON instead of reimplementing it.
+#
+# oneline collapses embedded newlines: a WhatsApp message can span many lines,
+# and this format promises one line per message so an agent can read it with
+# `while read`. Use --json when the original line breaks matter.
 JQ_LINE='
+  def oneline: (. // "") | gsub("\\s+"; " ") | sub("^ +"; "") | sub(" +$"; "");
   (if .is_from_me then "out" else "in " end) as $dir
-  | (if .chat_name != "" then .chat_name else .chat_jid end) as $chat
+  | (if .chat_name != "" then (.chat_name | oneline) else .chat_jid end) as $chat
   | (if .is_from_me then "Me"
-     elif .sender_name != "" then .sender_name
+     elif .sender_name != "" then (.sender_name | oneline)
      else .sender end) as $who
   | (if .media_type != "" then "[" + .media_type + ": " + .filename + "] " else "" end) as $media
   | .timestamp + " | " + $dir + " | " + $chat + " <" + .chat_jid + "> | "
-    + $who + ": " + $media + .text + " | id=" + .id
+    + $who + ": " + $media + (.text | oneline) + " | id=" + .id
 '
 
 emit() {

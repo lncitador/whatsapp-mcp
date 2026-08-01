@@ -6,6 +6,7 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 
@@ -99,5 +100,21 @@ func TestStoreOutgoingFallsBackToLocalTime(t *testing.T) {
 	}
 	if msgs[0].Timestamp.Before(before) {
 		t.Errorf("timestamp = %v, want a fallback to roughly now", msgs[0].Timestamp)
+	}
+}
+
+// An album header carries no content of its own, so it used to be discarded —
+// leaving an unexplained gap where a batch of photos was shared. Seen in
+// production as "populated waE2E fields: [AlbumMessage]".
+func TestSynthesizeAlbumMessage(t *testing.T) {
+	got := synthesizeContent(&waProto.Message{
+		AlbumMessage: &waE2E.AlbumMessage{
+			ExpectedImageCount: proto.Uint32(3),
+			ExpectedVideoCount: proto.Uint32(1),
+		},
+	})
+	want := "[álbum: 3 imagem(ns), 1 vídeo(s)]"
+	if got != want {
+		t.Errorf("synthesizeContent(album) = %q, want %q", got, want)
 	}
 }

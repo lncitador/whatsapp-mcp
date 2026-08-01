@@ -88,6 +88,13 @@ func synthesizeContent(msg *waProto.Message) string {
 	if reaction := msg.GetReactionMessage(); reaction != nil {
 		return fmt.Sprintf("[reação: %s a %s]", reaction.GetText(), reaction.GetKey().GetID())
 	}
+	// An album carries no content of its own — it is a header announcing how
+	// many images and videos follow as separate messages. Storing it keeps the
+	// grouping visible instead of leaving an unexplained gap in the thread.
+	if album := msg.GetAlbumMessage(); album != nil {
+		return fmt.Sprintf("[álbum: %d imagem(ns), %d vídeo(s)]",
+			album.GetExpectedImageCount(), album.GetExpectedVideoCount())
+	}
 	if btn := msg.GetButtonsResponseMessage(); btn != nil {
 		if text := btn.GetSelectedDisplayText(); text != "" {
 			return fmt.Sprintf("[botão: %s]", text)

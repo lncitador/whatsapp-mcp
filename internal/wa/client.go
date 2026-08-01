@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -43,6 +44,29 @@ type Status struct {
 	LastResyncReason      string     `json:"last_resync_reason,omitempty"`
 	LastResyncChats       int        `json:"last_resync_chats,omitempty"`
 	LastResyncNewMessages int        `json:"last_resync_new_messages,omitempty"`
+
+	// Connection health. On the reference production log the socket dropped
+	// every ~50 minutes with a <stream:error> node and none of it was visible
+	// outside whatsmeow's own logging: 22 reconnects in 23.5h, zero offline
+	// syncs completed, nothing in the status. LastStreamError holds the last
+	// transport-level failure whatsmeow reported (stream error, keepalive
+	// timeout, connect failure, ban) so a flaky link is diagnosable from
+	// /api/status instead of by grepping the daemon log.
+	LastStreamError        string     `json:"last_stream_error,omitempty"`
+	LastStreamErrorAt      *time.Time `json:"last_stream_error_at,omitempty"`
+	ConsecutiveDisconnects int        `json:"consecutive_disconnects,omitempty"`
+	LastDisconnectAt       *time.Time `json:"last_disconnect_at,omitempty"`
+	LastConnectedAt        *time.Time `json:"last_connected_at,omitempty"`
+}
+
+// connHealth is the transport-level history behind Status. It lives outside
+// Status because setState replaces the whole struct on every state change.
+type connHealth struct {
+	lastStreamError        string
+	lastStreamErrorAt      time.Time
+	consecutiveDisconnects int
+	lastDisconnectAt       time.Time
+	lastConnectedAt        time.Time
 }
 
 // resyncResult is the measured outcome of one history resync.
@@ -61,6 +85,11 @@ type Client struct {
 	mu               sync.RWMutex
 	status           Status
 	lastResyncResult resyncResult
+	health           connHealth
+
+	// noAutoResync mirrors WHATSAPP_MCP_DISABLE_AUTO_RESYNC: event- and
+	// timer-driven backfills are off, manual ones still work.
+	noAutoResync bool
 
 	resyncMu   sync.Mutex
 	lastResync time.Time
@@ -119,7 +148,26 @@ const (
 	// historySyncCount is the number of messages requested per chat; 50 is
 	// whatsmeow's recommended batch size.
 	historySyncCount = 50
+
+	// disableAutoResyncEnv switches off the event- and timer-driven history
+	// backfill only; POST /api/resync keeps working. It exists to test the
+	// standing suspicion that the burst of peer messages we send seconds
+	// after authenticating is what stops the server from delivering the
+	// offline queue (zero "offline sync completed" in 22 reconnects, while
+	// the pending count grew from 76 to 374). Running a session with this set
+	// is the cheapest way to confirm or kill that hypothesis.
+	disableAutoResyncEnv = "WHATSAPP_MCP_DISABLE_AUTO_RESYNC"
 )
+
+// autoResyncDisabled reads the knob above. Read once at New so the daemon's
+// behaviour can't change under it mid-session.
+func autoResyncDisabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(disableAutoResyncEnv))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
 
 func (c *Client) setState(s AuthState, qr, msg string) {
 	c.mu.Lock()
@@ -140,6 +188,21 @@ func (c *Client) Status() Status {
 		s.LastResyncChats = r.chats
 		s.LastResyncNewMessages = r.newMessages
 	}
+	h := c.health
+	s.ConsecutiveDisconnects = h.consecutiveDisconnects
+	if h.lastStreamError != "" {
+		s.LastStreamError = h.lastStreamError
+		at := h.lastStreamErrorAt
+		s.LastStreamErrorAt = &at
+	}
+	if !h.lastDisconnectAt.IsZero() {
+		at := h.lastDisconnectAt
+		s.LastDisconnectAt = &at
+	}
+	if !h.lastConnectedAt.IsZero() {
+		at := h.lastConnectedAt
+		s.LastConnectedAt = &at
+	}
 	return s
 }
 
@@ -147,6 +210,35 @@ func (c *Client) recordResync(r resyncResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lastResyncResult = r
+}
+
+// noteStreamError records the last transport-level failure. Every one of
+// these is a plausible reason for the offline queue never being delivered, so
+// they must outlive the event that carried them.
+func (c *Client) noteStreamError(desc string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.health.lastStreamError = desc
+	c.health.lastStreamErrorAt = time.Now()
+}
+
+// noteConnectedHealth resets the disconnect streak: the link came back.
+func (c *Client) noteConnectedHealth() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.health.consecutiveDisconnects = 0
+	c.health.lastConnectedAt = time.Now()
+}
+
+// noteDisconnectedHealth counts the drop and returns the streak length plus
+// the last error reported before it, which is the closest thing to a reason:
+// events.Disconnected itself carries no payload at all.
+func (c *Client) noteDisconnectedHealth() (streak int, lastError string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.health.consecutiveDisconnects++
+	c.health.lastDisconnectAt = time.Now()
+	return c.health.consecutiveDisconnects, c.health.lastStreamError
 }
 
 func New(st *store.Store) (*Client, error) {
@@ -167,10 +259,14 @@ func New(st *store.Store) (*Client, error) {
 		}
 	}
 	c := &Client{
-		wm:     whatsmeow.NewClient(device, logger),
-		st:     st,
-		logger: logger,
-		stopCh: make(chan struct{}),
+		wm:           whatsmeow.NewClient(device, logger),
+		st:           st,
+		logger:       logger,
+		stopCh:       make(chan struct{}),
+		noAutoResync: autoResyncDisabled(),
+	}
+	if c.noAutoResync {
+		logger.Infof("%s is set: automatic history backfill disabled (POST /api/resync still works)", disableAutoResyncEnv)
 	}
 	c.setState(AuthConnecting, "", "starting")
 	c.wm.AddEventHandler(func(evt any) {
@@ -187,6 +283,7 @@ func New(st *store.Store) (*Client, error) {
 			go c.autoResync("offline sync completed", false)
 		case *events.Connected:
 			c.setState(AuthConnected, "", "")
+			c.noteConnectedHealth()
 			// OfflineSyncCompleted often never fires on a flaky link, so the
 			// offline backlog never drains and afternoon messages go missing
 			// until a manual daemon restart. Resync on every (re)connect too,
@@ -202,8 +299,59 @@ func New(st *store.Store) (*Client, error) {
 		case *events.Disconnected:
 			c.setState(AuthConnecting, "", "disconnected, reconnecting")
 			c.noteDisconnected()
+			// events.Disconnected is an empty struct: the reason, when there
+			// is one, arrived moments earlier as StreamError/KeepAliveTimeout/
+			// ConnectFailure. Pair them here so one log line explains the drop.
+			streak, lastErr := c.noteDisconnectedHealth()
+			if lastErr == "" {
+				lastErr = "none reported"
+			}
+			c.logger.Warnf("Disconnected from WhatsApp (consecutive: %d, last reported cause: %s)", streak, lastErr)
 		case *events.LoggedOut:
 			c.setState(AuthLoggedOut, "", "device logged out — re-pair via auth_status QR")
+		case *events.StreamError:
+			// The reference outage was `<stream:error><ack class="status"
+			// type="media"/></stream:error>` 146 times in one day; the raw
+			// node is the only thing that identifies which one it is.
+			desc := fmt.Sprintf("stream error (code %q)", v.Code)
+			if v.Raw != nil {
+				desc = fmt.Sprintf("stream error (code %q): %s", v.Code, v.Raw.String())
+			}
+			c.logger.Errorf("%s", desc)
+			c.noteStreamError(desc)
+		case *events.KeepAliveTimeout:
+			desc := fmt.Sprintf("keepalive timeout (%d consecutive, last success %s)",
+				v.ErrorCount, v.LastSuccess.Format(time.RFC3339))
+			c.logger.Warnf("%s", desc)
+			c.noteStreamError(desc)
+		case *events.KeepAliveRestored:
+			c.logger.Infof("Keepalive restored")
+		case *events.ConnectFailure:
+			desc := fmt.Sprintf("connect failure: %s (%s)", v.Reason, v.Message)
+			c.logger.Errorf("%s", desc)
+			c.noteStreamError(desc)
+			c.setState(AuthConnecting, "", "connect failure: "+v.Reason.String())
+		// The three below implement events.PermanentDisconnect: whatsmeow does
+		// not reconnect on its own after them, so the daemon sits there
+		// looking merely "disconnected" while nothing will ever arrive again.
+		// Say so in the status message — the state enum has no word for it.
+		case *events.TemporaryBan:
+			desc := v.String()
+			c.logger.Errorf("%s", desc)
+			c.noteStreamError(desc)
+			c.setState(AuthConnecting, "", desc+" (no automatic reconnect)")
+		case *events.ClientOutdated:
+			desc := "client outdated — WhatsApp rejected the connection, the whatsmeow dependency needs updating"
+			c.logger.Errorf("%s", desc)
+			c.noteStreamError(desc)
+			c.setState(AuthConnecting, "", desc+" (no automatic reconnect)")
+		case *events.StreamReplaced:
+			// Two daemons on the same session: the socket dies for good and
+			// nothing arrives again, which looks exactly like the drain bug.
+			desc := "stream replaced — another client connected with this session"
+			c.logger.Errorf("%s", desc)
+			c.noteStreamError(desc)
+			c.setState(AuthConnecting, "", desc+" (no automatic reconnect, restart the daemon)")
 		}
 	})
 	return c, nil
@@ -401,6 +549,9 @@ func (c *Client) claimResync(force bool) bool {
 // OfflineSyncCompleted go missing on a bad link. Sweep on a timer too.
 func (c *Client) resyncLoop(ctx context.Context) {
 	defer c.recoverPanic("periodic resync loop")
+	if c.noAutoResync {
+		return
+	}
 	t := time.NewTicker(periodicResyncInterval)
 	defer t.Stop()
 	for {
@@ -417,13 +568,19 @@ func (c *Client) resyncLoop(ctx context.Context) {
 	}
 }
 
-// autoResync pulls recent history after a (re)connect, debounced. It waits a
-// few seconds first to let normal offline delivery try, then fills any gap;
-// if the link dropped again while waiting it retries with backoff rather than
-// giving up silently, because "we reconnected and immediately fell over" is
-// precisely the case where messages go missing.
+// autoResync backfills history after a (re)connect, debounced. It waits a few
+// seconds first to let normal offline delivery try, then asks for the history
+// preceding what we already have; if the link dropped again while waiting it
+// retries with backoff rather than giving up silently, because "we reconnected
+// and immediately fell over" is precisely the case where messages go missing.
+//
+// This is a backfill, not a drain: see RequestHistorySync for why the two are
+// not the same thing.
 func (c *Client) autoResync(reason string, force bool) {
 	defer c.recoverPanic("auto resync (" + reason + ")")
+	if c.noAutoResync {
+		return
+	}
 	if !c.claimResync(force) {
 		return
 	}
@@ -436,24 +593,34 @@ func (c *Client) autoResync(reason string, force bool) {
 			break
 		}
 		if attempt >= len(resyncBackoff) {
-			c.logger.Warnf("Auto history resync (%s) gave up: still disconnected after %d retries", reason, attempt)
+			c.logger.Warnf("Auto history backfill (%s) gave up: still disconnected after %d retries", reason, attempt)
 			return
 		}
 		delay = resyncBackoff[attempt]
-		c.logger.Infof("Auto history resync (%s): not connected, retrying in %s", reason, delay)
+		c.logger.Infof("Auto history backfill (%s): not connected, retrying in %s", reason, delay)
 	}
-	c.logger.Infof("Auto history resync (%s)", reason)
+	c.logger.Infof("Auto history backfill (%s)", reason)
 	if _, err := c.requestHistorySync(reason, resyncRecentChats); err != nil {
-		c.logger.Warnf("Auto history resync failed: %v", err)
+		c.logger.Warnf("Auto history backfill failed: %v", err)
 	}
 }
 
-// RequestHistorySync asks WhatsApp to redeliver recent history, anchored on
-// each chat's last known message. Normally triggered automatically on
-// OfflineSyncCompleted, but that event doesn't always fire on a flaky
-// connection (repeated stream drops prevent the offline-sync backlog from
-// ever fully draining) — exposed here so it can also be triggered on demand
-// via POST /api/resync.
+// RequestHistorySync backfills history BACKWARDS: for each selected chat it
+// asks WhatsApp for the messages immediately BEFORE the oldest message we
+// have in that part of the timeline.
+//
+// This direction is not a choice. whatsmeow's BuildHistorySyncRequest fills
+// OldestMsgID/OldestMsgFromMe/OldestMsgTimestampMS and is documented as
+// returning "count messages immediately before the given message"
+// (whatsmeow/send.go:558-582). An earlier version of this code anchored on
+// each chat's NEWEST message, which asked the server for 50 messages we
+// already had — 337 "Stored 0 messages" responses in one production day.
+//
+// The honest consequence: this is a backfill mechanism, NOT a way to recover
+// messages that arrived while the daemon was offline. Those come through the
+// offline queue (events.Message on reconnect) or the server's own RECENT
+// history sync. POST /api/resync therefore fills gaps *behind* the timeline;
+// it will not conjure up this afternoon's missing messages.
 //
 // limit sizes the "most recently active" slice of the selection; chats active
 // in the last 48h are always included on top of it (see
@@ -503,48 +670,85 @@ func (c *Client) requestHistorySync(reason string, limit int) (sent int, err err
 	// history had time to land (see reportResync).
 	before, countErr := c.st.CountMessages()
 	if countErr != nil {
-		c.logger.Warnf("Resync %s: cannot count messages before sync: %v", reason, countErr)
+		c.logger.Warnf("Backfill %s: cannot count messages before sync: %v", reason, countErr)
 	}
 
-	skipped := 0
+	skipped, noAnchor := 0, 0
+	var noAnchorSample []string
 	for _, chat := range chats {
-		lastMsg, err := c.st.GetLastMessageForChat(chat.JID)
+		oldest, err := c.backfillAnchorMessage(chat.JID)
 		if err != nil {
-			c.logger.Warnf("Resync %s: last message lookup failed for %s: %v", reason, chat.JID, err)
+			c.logger.Warnf("Backfill %s: anchor lookup failed for %s: %v", reason, chat.JID, err)
 			skipped++
 			continue
 		}
-		anchor, err := historySyncAnchor(chat.JID, lastMsg)
+		anchor, err := historySyncAnchor(chat.JID, oldest)
 		if err != nil {
 			// Not fatal for the pass: a chat with no usable anchor simply
-			// can't be asked about, the others still can.
-			c.logger.Debugf("Resync %s: skipping %s: %v", reason, chat.JID, err)
+			// can't be asked about, the others still can. Counted rather than
+			// logged per chat — this used to be a Debugf, and the daemon logs
+			// at INFO, so in production the reason was never visible at all
+			// even though it hit 90 of 215 chats.
 			skipped++
+			noAnchor++
+			if len(noAnchorSample) < 5 {
+				noAnchorSample = append(noAnchorSample, fmt.Sprintf("%s (%v)", chat.JID, err))
+			}
 			continue
 		}
 		req := c.wm.BuildHistorySyncRequest(anchor, historySyncCount)
 		if req == nil {
 			// Documented as always non-nil, but a nil here would panic deep
 			// inside SendPeerMessage and take the daemon with it.
-			c.logger.Warnf("Resync %s: nil history sync request built for %s", reason, chat.JID)
+			c.logger.Warnf("Backfill %s: nil history sync request built for %s", reason, chat.JID)
 			skipped++
 			continue
 		}
 		if _, err := c.wm.SendPeerMessage(context.Background(), req); err != nil {
-			c.logger.Warnf("Failed to request history sync for %s: %v", chat.JID, err)
+			c.logger.Warnf("Failed to request history backfill for %s: %v", chat.JID, err)
 			skipped++
 			continue
 		}
 		sent++
-		c.logger.Infof("Requested history sync for %s (anchor: %s)", chat.JID, anchor.ID)
+		c.logger.Infof("Requested history backfill for %s: %d messages before %s (%s)",
+			chat.JID, historySyncCount, anchor.ID, anchor.Timestamp.Format(time.RFC3339))
 	}
 
-	c.logger.Infof("Resync %s: requested history for %d chats (%d skipped of %d selected)",
+	c.logger.Infof("Backfill %s: requested history for %d chats (%d skipped of %d selected)",
 		reason, sent, skipped, len(chats))
+	if noAnchor > 0 {
+		c.logger.Infof("Backfill %s: %d chats skipped for lack of an anchor (no stored message to ask before): %s",
+			reason, noAnchor, strings.Join(noAnchorSample, "; "))
+	}
 	if sent > 0 && countErr == nil {
 		go c.reportResync(reason, sent, before)
 	}
 	return sent, nil
+}
+
+// backfillAnchorMessage picks the message the history request anchors on.
+// The server returns what came immediately BEFORE it, so the anchor has to be
+// the oldest message of the stretch we want filled — never the newest.
+//
+// Preference order:
+//  1. the oldest message inside the recent window. A gap opened by an outage
+//     yesterday sits just before whatever did make it in since; anchoring
+//     there asks for exactly that gap.
+//  2. otherwise the oldest message in the chat, which walks the chat's
+//     history further back one batch per pass.
+func (c *Client) backfillAnchorMessage(chatJID string) (*store.Message, error) {
+	m, err := c.st.GetOldestMessageSince(chatJID, time.Now().Add(-resyncActiveWindow))
+	if err != nil {
+		return nil, fmt.Errorf("oldest recent message for %s: %w", chatJID, err)
+	}
+	if m != nil {
+		return m, nil
+	}
+	m, err = c.st.GetOldestMessageForChat(chatJID)
+	if err != nil {
+		return nil, fmt.Errorf("oldest message for %s: %w", chatJID, err)
+	}
+	return m, nil
 }
 
 // reportResync measures the drain. Requested history comes back
@@ -559,14 +763,14 @@ func (c *Client) reportResync(reason string, chats int, before int64) {
 	}
 	after, err := c.st.CountMessages()
 	if err != nil {
-		c.logger.Warnf("Resync %s: cannot count messages after sync: %v", reason, err)
+		c.logger.Warnf("Backfill %s: cannot count messages after sync: %v", reason, err)
 		return
 	}
 	newMessages := int(after - before)
 	if newMessages < 0 {
 		newMessages = 0
 	}
-	c.logger.Infof("Resync %s: %d new messages in %d chats", reason, newMessages, chats)
+	c.logger.Infof("Backfill %s: %d new messages in %d chats", reason, newMessages, chats)
 	c.recordResync(resyncResult{at: time.Now(), reason: reason, chats: chats, newMessages: newMessages})
 }
 
@@ -579,10 +783,15 @@ func (c *Client) recoverPanicValue(what string, r any) {
 }
 
 // historySyncAnchor builds the "oldest known message" that whatsmeow anchors
-// an on-demand history request on. BuildHistorySyncRequest dereferences the
-// info and reads Chat, ID, IsFromMe and Timestamp without a single nil or
-// zero check, so validate here: a nil info panics, and a zero timestamp or
-// empty ID produces a request WhatsApp silently answers nothing for.
+// an on-demand history request on — the protobuf fields are literally
+// OldestMsgID/OldestMsgTimestampMS, and the server answers with the messages
+// before it. Callers must pass the oldest message of the range they want
+// filled (see backfillAnchorMessage), not the newest.
+//
+// BuildHistorySyncRequest dereferences the info and reads Chat, ID, IsFromMe
+// and Timestamp without a single nil or zero check, so validate here: a nil
+// info panics, and a zero timestamp or empty ID produces a request WhatsApp
+// silently answers nothing for.
 func historySyncAnchor(chatJID string, last *store.Message) (*types.MessageInfo, error) {
 	if last == nil {
 		return nil, fmt.Errorf("chat has no stored message to anchor on")

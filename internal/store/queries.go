@@ -227,6 +227,15 @@ func (s *Store) ListChats(query string, limit, page int, includeLastMessage bool
 	return out, rows.Err()
 }
 
+// resyncChatFilter is the "this is a real conversation" predicate used by the
+// resync selection. Status updates (status@broadcast), broadcast lists
+// (<id>@broadcast) and newsletters (<id>@newsletter) are one-way feeds: the
+// history of a channel is not what a resync is for, and asking about them
+// costs exactly as much as asking about a chat that matters.
+func resyncChatFilter(col string) string {
+	return "(" + col + " NOT LIKE '%@broadcast' AND " + col + " NOT LIKE '%@newsletter')"
+}
+
 // ListChatsForResync picks the chats a history resync should ask about.
 //
 // Plain "top-N by last_message_time" (what ListChats does) is the wrong
@@ -241,6 +250,13 @@ func (s *Store) ListChats(query string, limit, page int, includeLastMessage bool
 //
 // maxChats caps the union because each selected chat costs one peer message
 // to WhatsApp; an unbounded list would turn a reconnect into a flood.
+//
+// Broadcast and newsletter JIDs are excluded outright: status@broadcast alone
+// held 1903 rows in the reference database and, together with three
+// newsletters, was eating half of a top-10 selection — peer messages spent on
+// feeds nobody reads instead of on real conversations. The filter also
+// applies inside the top-N subquery, or the excluded chats would still burn
+// their slots before being dropped by the outer WHERE.
 func (s *Store) ListChatsForResync(recentLimit int, activeSince time.Time, maxChats int) ([]Chat, error) {
 	if recentLimit <= 0 {
 		recentLimit = 20
@@ -250,8 +266,10 @@ func (s *Store) ListChatsForResync(recentLimit int, activeSince time.Time, maxCh
 	}
 	rows, err := s.db.Query(
 		`SELECT c.jid, IFNULL(c.name,''), c.last_message_time, '', '', 0 FROM chats c
-		WHERE c.last_message_time >= ?
-		   OR c.jid IN (SELECT jid FROM chats ORDER BY last_message_time DESC LIMIT ?)
+		WHERE `+resyncChatFilter("c.jid")+`
+		  AND (c.last_message_time >= ?
+		   OR c.jid IN (SELECT jid FROM chats WHERE `+resyncChatFilter("jid")+
+			` ORDER BY last_message_time DESC LIMIT ?))
 		ORDER BY c.last_message_time DESC LIMIT ?`,
 		activeSince, recentLimit, maxChats)
 	if err != nil {
@@ -344,12 +362,56 @@ func (s *Store) GetContactChats(jid string, limit, page int) ([]Chat, error) {
 	return out, rows.Err()
 }
 
+// GetLastMessageForChat returns the newest stored message of a chat. Do not
+// use it to anchor a history request — see GetOldestMessageForChat for why.
 func (s *Store) GetLastMessageForChat(chatJID string) (*Message, error) {
 	row := s.db.QueryRow(
 		"SELECT "+messageCols+" FROM messages JOIN chats ON messages.chat_jid = chats.jid"+
 			" WHERE messages.chat_jid = ? ORDER BY messages.timestamp DESC LIMIT 1",
 		chatJID)
 	m, err := scanMessage(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// GetOldestMessageForChat returns the earliest stored message of a chat, or
+// nil when the chat has none.
+//
+// This is the anchor an on-demand history request needs: whatsmeow's
+// BuildHistorySyncRequest fills OldestMsgID/OldestMsgTimestampMS and WhatsApp
+// answers with the messages immediately BEFORE it (whatsmeow/send.go:558-582).
+// Anchoring on the newest message instead — what GetLastMessageForChat
+// returns — asks the server to resend history we already have.
+func (s *Store) GetOldestMessageForChat(chatJID string) (*Message, error) {
+	return s.oldestMessage(
+		"SELECT "+messageCols+" FROM messages JOIN chats ON messages.chat_jid = chats.jid"+
+			" WHERE messages.chat_jid = ? ORDER BY messages.timestamp ASC LIMIT 1",
+		chatJID)
+}
+
+// GetOldestMessageSince returns the earliest message of a chat at or after
+// since, or nil if the chat has been silent in that window.
+//
+// It anchors a targeted backfill: after an outage the gap sits immediately
+// before the first message that did get through afterwards, so asking for the
+// messages preceding that one is what actually fills the hole. Falling back
+// to GetOldestMessageForChat walks the whole chat backwards instead, which is
+// correct but slower to reach a recent gap.
+func (s *Store) GetOldestMessageSince(chatJID string, since time.Time) (*Message, error) {
+	return s.oldestMessage(
+		"SELECT "+messageCols+" FROM messages JOIN chats ON messages.chat_jid = chats.jid"+
+			" WHERE messages.chat_jid = ? AND messages.timestamp >= ?"+
+			" ORDER BY messages.timestamp ASC LIMIT 1",
+		chatJID, since)
+}
+
+func (s *Store) oldestMessage(query string, args ...any) (*Message, error) {
+	m, err := scanMessage(s.db.QueryRow(query, args...))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

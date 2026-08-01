@@ -251,6 +251,171 @@ func TestResyncLoopExitsOnContextCancel(t *testing.T) {
 	}
 }
 
+// A drop with no preceding error is indistinguishable in the log from one
+// caused by a stream error unless the two are correlated, so Status has to
+// carry the last transport failure and the disconnect streak.
+func TestConnectionHealthInStatus(t *testing.T) {
+	c := &Client{logger: waLog.Noop}
+	c.setState(AuthConnected, "", "")
+	if s := c.Status(); s.LastStreamError != "" || s.LastStreamErrorAt != nil || s.ConsecutiveDisconnects != 0 {
+		t.Fatalf("clean client must report no connection trouble: %+v", s)
+	}
+
+	c.noteStreamError(`stream error (code "unknown"): <stream:error><ack class="status" type="media"/></stream:error>`)
+	streak, lastErr := c.noteDisconnectedHealth()
+	if streak != 1 || !strings.Contains(lastErr, "ack class") {
+		t.Fatalf("streak=%d lastErr=%q", streak, lastErr)
+	}
+	if streak, _ := c.noteDisconnectedHealth(); streak != 2 {
+		t.Fatalf("consecutive drops must accumulate, got %d", streak)
+	}
+
+	// A reconnect replaces the auth status; the diagnosis must survive it.
+	c.setState(AuthConnecting, "", "disconnected, reconnecting")
+	s := c.Status()
+	if !strings.Contains(s.LastStreamError, "ack class") {
+		t.Fatalf("LastStreamError = %q", s.LastStreamError)
+	}
+	if s.LastStreamErrorAt == nil || s.LastDisconnectAt == nil {
+		t.Fatalf("want timestamps, got %+v", s)
+	}
+	if s.ConsecutiveDisconnects != 2 {
+		t.Fatalf("ConsecutiveDisconnects = %d, want 2", s.ConsecutiveDisconnects)
+	}
+
+	// Reconnecting clears the streak but keeps the error for post-mortem.
+	c.noteConnectedHealth()
+	s = c.Status()
+	if s.ConsecutiveDisconnects != 0 || s.LastConnectedAt == nil {
+		t.Fatalf("after reconnect: %+v", s)
+	}
+	if s.LastStreamError == "" {
+		t.Fatal("the last stream error must outlive the reconnect")
+	}
+}
+
+func TestAutoResyncDisabledEnv(t *testing.T) {
+	for _, v := range []string{"1", "true", "YES", " on "} {
+		t.Setenv(disableAutoResyncEnv, v)
+		if !autoResyncDisabled() {
+			t.Fatalf("%q must disable the automatic backfill", v)
+		}
+	}
+	for _, v := range []string{"", "0", "false", "no"} {
+		t.Setenv(disableAutoResyncEnv, v)
+		if autoResyncDisabled() {
+			t.Fatalf("%q must leave the automatic backfill on", v)
+		}
+	}
+}
+
+// The knob only silences the automatic paths: the manual one behind
+// POST /api/resync has to keep working, because it is what an operator uses
+// while running the experiment the knob exists for.
+func TestAutoResyncDisabledSkipsAutomaticPathsOnly(t *testing.T) {
+	restore := shrinkResyncTimings(t)
+	defer restore()
+
+	c := &Client{logger: waLog.Noop, stopCh: make(chan struct{}), noAutoResync: true}
+	c.autoResync("connected", true)
+	if !c.lastResync.IsZero() {
+		t.Fatal("a disabled auto backfill must not even claim the debounce")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.resyncLoop(context.Background())
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("resyncLoop must return immediately when auto backfill is disabled")
+	}
+
+	// Manual path still runs (and fails here only for lack of a session).
+	if err := c.RequestHistorySync(10); err == nil {
+		t.Fatal("want the manual path to run and report the missing client")
+	}
+}
+
+// The anchor decides which direction history is requested in. WhatsApp
+// answers with the messages BEFORE it, so anchoring on the newest message
+// re-requests what we already have — that was the original bug.
+func TestBackfillAnchorMessageUsesOldest(t *testing.T) {
+	t.Setenv("WHATSAPP_MCP_DIR", t.TempDir())
+	st, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	const jid = "5511999999999@s.whatsapp.net"
+	now := time.Now()
+	if err := st.StoreChat(jid, "Alice", now); err != nil {
+		t.Fatal(err)
+	}
+	msgs := []store.NewMessage{
+		{ID: "OLD", ChatJID: jid, Sender: "5511999999999", Content: "antiga", Timestamp: now.Add(-30 * 24 * time.Hour)},
+		{ID: "GAPEDGE", ChatJID: jid, Sender: "5511999999999", Content: "depois do buraco", Timestamp: now.Add(-2 * time.Hour)},
+		{ID: "NEW", ChatJID: jid, Sender: "5511999999999", Content: "recente", Timestamp: now},
+	}
+	for _, m := range msgs {
+		if err := st.StoreMessage(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c := &Client{logger: waLog.Noop, st: st}
+	got, err := c.backfillAnchorMessage(jid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Oldest inside the 48h window: the gap sits right before it.
+	if got == nil || got.ID != "GAPEDGE" {
+		t.Fatalf("anchor = %+v, want GAPEDGE", got)
+	}
+
+	// Silent chat: fall back to the chat's absolute oldest message and walk
+	// history backwards instead.
+	const quiet = "5511888888888@s.whatsapp.net"
+	if err := st.StoreChat(quiet, "Bob", now.Add(-90*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []store.NewMessage{
+		{ID: "Q1", ChatJID: quiet, Sender: "5511888888888", Content: "a", Timestamp: now.Add(-100 * 24 * time.Hour)},
+		{ID: "Q2", ChatJID: quiet, Sender: "5511888888888", Content: "b", Timestamp: now.Add(-90 * 24 * time.Hour)},
+	} {
+		if err := st.StoreMessage(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err = c.backfillAnchorMessage(quiet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.ID != "Q1" {
+		t.Fatalf("anchor = %+v, want Q1", got)
+	}
+
+	// A chat with no messages has no anchor at all — the caller counts it as
+	// skipped rather than sending a request that can't mean anything.
+	const empty = "5511777777777@s.whatsapp.net"
+	if err := st.StoreChat(empty, "Carol", now); err != nil {
+		t.Fatal(err)
+	}
+	got, err = c.backfillAnchorMessage(empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("want nil anchor for an empty chat, got %+v", got)
+	}
+	if _, err := historySyncAnchor(empty, got); err == nil {
+		t.Fatal("want historySyncAnchor to reject a nil message")
+	}
+}
+
 // shrinkResyncTimings makes the resync delays test-sized. Tests using it must
 // not run in parallel: the timings are package-level vars.
 func shrinkResyncTimings(t *testing.T) func() {

@@ -259,6 +259,110 @@ func TestListChatsForResync(t *testing.T) {
 	}
 }
 
+// Status updates and newsletters are one-way feeds; letting them into the
+// selection spends peer messages that real conversations need. status@broadcast
+// alone was the single most active "chat" in the reference database.
+func TestListChatsForResyncExcludesBroadcastAndNewsletter(t *testing.T) {
+	s := openTestStore(t)
+	now := time.Now()
+	for jid, ts := range map[string]time.Time{
+		"status@broadcast":              now,                     // noisiest of all
+		"12345@broadcast":               now.Add(-1 * time.Hour), // broadcast list
+		"120363407230729311@newsletter": now.Add(-2 * time.Hour),
+		"5511999999999@s.whatsapp.net":  now.Add(-3 * time.Hour),
+		"123-group@g.us":                now.Add(-4 * time.Hour),
+	} {
+		if err := s.StoreChat(jid, jid, ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// recentLimit is big enough to cover every chat, so anything missing was
+	// filtered rather than ranked out.
+	got, err := s.ListChatsForResync(10, now.Add(-48*time.Hour), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{
+		"5511999999999@s.whatsapp.net": true,
+		"123-group@g.us":               true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("want %d chats, got %+v", len(want), got)
+	}
+	for _, c := range got {
+		if !want[c.JID] {
+			t.Fatalf("%s must not be selected for resync: %+v", c.JID, got)
+		}
+	}
+
+	// The top-N subquery must filter too: with recentLimit=1 the single slot
+	// would otherwise go to status@broadcast and be dropped afterwards,
+	// silently costing a real chat its place.
+	got, err = s.ListChatsForResync(1, now, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].JID != "5511999999999@s.whatsapp.net" {
+		t.Fatalf("top-1 slot must go to a real chat, got %+v", got)
+	}
+}
+
+func TestGetOldestMessageForChat(t *testing.T) {
+	s := seed(t)
+
+	// The history request anchors on this message and asks for what came
+	// before it, so it has to be the earliest one, not the latest.
+	msg, err := s.GetOldestMessageForChat("5511999999999@s.whatsapp.net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || msg.ID != "A1" {
+		t.Fatalf("want A1 (oldest), got %+v", msg)
+	}
+
+	msg, err = s.GetOldestMessageForChat("nobody@s.whatsapp.net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg != nil {
+		t.Fatalf("want nil for a chat with no messages, got %+v", msg)
+	}
+}
+
+func TestGetOldestMessageSince(t *testing.T) {
+	s := seed(t)
+	base := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+
+	// A2 is the first message at or after base+1h; A1 (at base) is older.
+	msg, err := s.GetOldestMessageSince("5511999999999@s.whatsapp.net", base.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || msg.ID != "A2" {
+		t.Fatalf("want A2, got %+v", msg)
+	}
+
+	// Inclusive bound: a message exactly at the cutoff still counts.
+	msg, err = s.GetOldestMessageSince("5511999999999@s.whatsapp.net", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || msg.ID != "A1" {
+		t.Fatalf("want A1 at the exact cutoff, got %+v", msg)
+	}
+
+	// Silent chat in the window: nil, so the caller can fall back to the
+	// chat's absolute oldest message.
+	msg, err = s.GetOldestMessageSince("5511999999999@s.whatsapp.net", base.Add(72*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg != nil {
+		t.Fatalf("want nil outside the window, got %+v", msg)
+	}
+}
+
 func TestTranscriptionRoundTrip(t *testing.T) {
 	s := seed(t)
 	tr := Transcription{

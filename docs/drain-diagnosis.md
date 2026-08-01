@@ -377,3 +377,38 @@ Sinais objetivos, em ordem de força:
    para de crescer (hoje: 90/215).
 5. `Status.LastResyncNewMessages` (já implementado pela Frente B) > 0 depois de uma janela offline
    real.
+
+---
+
+## 7. Resultado do experimento S1 (2026-08-01, sessão ao vivo)
+
+**S1 está REFUTADO.** A hipótese era que o burst de `SendPeerMessage` do auto-resync abortava a
+entrega da fila offline. Rodamos o daemon com `WHATSAPP_MCP_DISABLE_AUTO_RESYNC=1` — nenhum peer
+message sai — por 1h40, cobrindo duas quedas de stream. A fila continuou sem drenar.
+
+| horário | evento | pendentes anunciados | mensagens gravadas |
+|---|---|---|---|
+| 08:54 | start com backfill OFF | 844 total / 400 msgs | — |
+| 09:44 | `stream:error` → reconnect | 842 total / 400 msgs | **14** (backlog de 14:46→15:01 de 31/07) |
+| 10:34 | `stream:error` → reconnect | 863 total / **414** msgs | **0** |
+
+Três leituras firmes:
+
+1. **Sem resync, a fila continua presa.** Duas reconexões limpas, zero `Offline sync completed`, e
+   o backlog anunciado *cresceu* de 400 para 414 mensagens. O burst de peer messages não é a causa.
+2. **A entrega de 09:44 foi pontual, não uma correção surtindo efeito.** Foram 14 mensagens de um
+   trecho específico (uma conversa de 14:46 a 15:01 de 31/07), e a reconexão seguinte não entregou
+   nada. Tratar aquilo como "o drain voltou" seria leitura errada dos dados.
+3. **A cadência da queda é fixa: ~50 min.** 08:54 → 09:44 → 10:34, sempre com
+   `<stream:error><ack class="status" id="..." type="media"/></stream:error>`. A regularidade
+   sugere timer/keepalive do lado do servidor, não instabilidade de rede.
+
+Com S1 fora, o suspeito que resta é o próprio `stream:error` de `type="media"` (C2): algo na sessão
+faz o servidor encerrar o stream antes de entregar a fila, e o `<ib><offline count=N/></ib>` que
+dispararia `OfflineSyncCompleted` nunca chega. Próximas linhas de investigação, em ordem de custo:
+
+- Correlacionar o `id` do `<ack>` (`3EB01ABF...`, `3EB097C9...`) com mensagens de status enviadas
+  pela conta — o prefixo `3EB0` é de mensagem gerada pelo próprio dispositivo.
+- Verificar se o whatsmeow desta versão confirma (`ack`) as notificações de status recebidas; um ack
+  faltando ou malformado explicaria tanto o `stream:error` quanto a fila nunca fechar.
+- Testar com o recebimento de status desabilitado na conta, isolando `type="media"` de status.

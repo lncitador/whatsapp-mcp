@@ -45,7 +45,9 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go logToolCall(auditLogPath(), tool, a.Recipient, r.RemoteAddr)
+	// Synchronous on purpose: this is the audit trail for sends, and a
+	// goroutine racing daemon shutdown loses exactly the entries that matter.
+	logToolCall(auditLogPath(), tool, a.Recipient, r.RemoteAddr)
 
 	switch tool {
 	case "search_contacts":

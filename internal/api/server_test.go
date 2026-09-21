@@ -359,6 +359,17 @@ func TestSendMessageReject(t *testing.T) {
 	if len(f.sent) != 0 {
 		t.Fatalf("should not have sent after rejection: %v", f.sent)
 	}
+
+	// Reject used to Get then Remove as two steps, so an approve arriving in
+	// between could still send a message the user had rejected.
+	resp3, _ := http.Post(ts.URL+"/api/approve/"+body.Result.RequestID, "application/json",
+		strings.NewReader(`{}`))
+	if resp3.StatusCode != 404 {
+		t.Fatalf("approve after reject: want 404, got %d", resp3.StatusCode)
+	}
+	if len(f.sent) != 0 {
+		t.Fatalf("a rejected request must stay unsendable: %v", f.sent)
+	}
 }
 
 func TestApproveNotFound(t *testing.T) {

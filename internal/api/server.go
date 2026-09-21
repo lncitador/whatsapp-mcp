@@ -304,10 +304,12 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("request_id")
-	if _, ok := s.approvals.Get(id); !ok {
+	// GetAndRemove, not Get then Remove: approve does the same, so a
+	// concurrent approve and reject of one request can no longer both pass
+	// the existence check and send a message the user rejected.
+	if _, ok := s.approvals.GetAndRemove(id); !ok {
 		writeError(w, 404, "approval request not found or expired")
 		return
 	}
-	s.approvals.Remove(id)
 	respond(w, map[string]any{"success": true, "message": "request rejected"}, nil)
 }

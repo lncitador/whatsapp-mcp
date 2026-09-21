@@ -365,6 +365,9 @@ func New(st *store.Store) (*Client, error) {
 }
 
 func (c *Client) Start(ctx context.Context) error {
+	if c.wm == nil || c.wm.Store == nil {
+		return fmt.Errorf("whatsapp client not initialised")
+	}
 	go c.resyncLoop(ctx)
 	if c.wm.Store.ID == nil {
 		qrChan, err := c.wm.GetQRChannel(ctx)

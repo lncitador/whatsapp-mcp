@@ -96,7 +96,10 @@ func (s *Store) ListMessages(a ListMessagesArgs) ([]Message, error) {
 		if s.hasFTS {
 			q[0] = "SELECT " + messageCols + " FROM messages JOIN chats ON messages.chat_jid = chats.jid JOIN messages_fts ON messages.rowid = messages_fts.rowid"
 			where = append(where, "messages_fts MATCH ?")
-			params = append(params, `"`+a.Query+`"`)
+			// FTS5 reads the phrase as a syntax expression, so an unescaped
+			// quote inside it (`foo"bar`) makes the whole MATCH a syntax
+			// error and the search returns nothing. Doubling is FTS5's escape.
+			params = append(params, `"`+strings.ReplaceAll(a.Query, `"`, `""`)+`"`)
 		} else {
 			where, params = append(where, "LOWER(messages.content) LIKE LOWER(?)"), append(params, "%"+a.Query+"%")
 		}

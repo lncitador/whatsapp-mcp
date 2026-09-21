@@ -213,7 +213,10 @@ func (c *Client) storeOutgoing(recipient types.JID, resp whatsmeow.SendResponse,
 		sender = c.wm.Store.GetJID().User
 	}
 
-	name := c.chatName(recipient, chatJID, nil, sender)
+	// No sender fallback here: for our own send, sender is OUR number, and
+	// naming a fresh DM after ourselves is worse than naming it after the
+	// recipient's number (chatName's own jid.User fallback).
+	name := c.chatName(recipient, chatJID, nil, "")
 	if err := c.st.StoreChat(chatJID, name, ts); err != nil {
 		c.logger.Warnf("Failed to store chat for sent message: %v", err)
 		return

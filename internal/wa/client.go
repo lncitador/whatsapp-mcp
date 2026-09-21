@@ -122,8 +122,10 @@ var (
 	periodicResyncInterval = 15 * time.Minute
 
 	// resyncInitialDelay gives WhatsApp's own offline delivery a head start
-	// before we ask for history explicitly.
-	resyncInitialDelay = 5 * time.Second
+	// before we ask for history explicitly. Kept generous on purpose: asking
+	// while the offline queue is still draining wastes peer messages on
+	// stretches the server is already about to deliver.
+	resyncInitialDelay = 15 * time.Second
 
 	// resyncBackoff is used when we wake up already disconnected again:
 	// reschedule instead of silently dropping the resync on the floor.
@@ -133,6 +135,11 @@ var (
 	// we measure how many messages it added — it comes back asynchronously as
 	// events.HistorySync, not in the send response.
 	resyncSettleDelay = 30 * time.Second
+
+	// historySyncSendInterval paces the peer messages: a resync pass can ask
+	// about 60 chats back to back, and WhatsApp throttles (or drops) a burst
+	// of peer messages from one session.
+	historySyncSendInterval = 50 * time.Millisecond
 
 	// resyncActiveWindow: every chat active within this window is resynced,
 	// regardless of its rank. See store.ListChatsForResync.
@@ -712,6 +719,7 @@ func (c *Client) requestHistorySync(reason string, limit int) (sent int, err err
 		sent++
 		c.logger.Infof("Requested history backfill for %s: %d messages before %s (%s)",
 			chat.JID, historySyncCount, anchor.ID, anchor.Timestamp.Format(time.RFC3339))
+		time.Sleep(historySyncSendInterval)
 	}
 
 	c.logger.Infof("Backfill %s: requested history for %d chats (%d skipped of %d selected)",

@@ -118,3 +118,43 @@ func TestSynthesizeAlbumMessage(t *testing.T) {
 		t.Errorf("synthesizeContent(album) = %q, want %q", got, want)
 	}
 }
+
+// A DM we start ourselves must be named after the recipient. storeOutgoing
+// used to hand chatName our own number as the sender fallback, which named a
+// fresh chat after us; the fallback below shows why that fallback wins over
+// the recipient's number, so the send path has to pass an empty sender.
+func TestChatNameSenderFallbackBeatsRecipientNumber(t *testing.T) {
+	c, _ := testClient(t)
+
+	recipient := types.JID{User: "559184540751", Server: types.DefaultUserServer}
+	ownNumber := "5591999999999"
+
+	if got := c.chatName(recipient, recipient.String(), nil, ownNumber); got != ownNumber {
+		t.Fatalf("chatName with a sender = %q, want the sender %q", got, ownNumber)
+	}
+	if got := c.chatName(recipient, recipient.String(), nil, ""); got != recipient.User {
+		t.Errorf("chatName without a sender = %q, want the recipient %q", got, recipient.User)
+	}
+}
+
+// End to end on the store: the chat row a send creates carries the
+// recipient's number, not ours.
+func TestStoreOutgoingNamesChatAfterRecipient(t *testing.T) {
+	c, _ := testClient(t)
+
+	to := types.JID{User: "559184540751", Server: types.DefaultUserServer}
+	c.storeOutgoing(to, whatsmeow.SendResponse{ID: "OUT4", Timestamp: time.Now()}, &waProto.Message{
+		Conversation: proto.String("first message of a new chat"),
+	})
+
+	chats, err := c.st.ListChats("", 10, 0, false, "")
+	if err != nil {
+		t.Fatalf("list chats: %v", err)
+	}
+	if len(chats) != 1 {
+		t.Fatalf("expected 1 chat, got %d", len(chats))
+	}
+	if chats[0].Name != to.User {
+		t.Errorf("chat name = %q, want the recipient %q", chats[0].Name, to.User)
+	}
+}

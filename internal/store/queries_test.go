@@ -403,3 +403,40 @@ func TestTranscriptionRoundTrip(t *testing.T) {
 		t.Fatalf("expected nil for missing transcription, got %+v", got)
 	}
 }
+
+// A quote inside the query used to reach FTS5 raw, so a search containing one
+// failed with "unterminated string" instead of returning results.
+func TestListMessagesQuoteInFTSQuery(t *testing.T) {
+	s := openTestStore(t)
+	if !s.hasFTS {
+		t.Skip("FTS5 unavailable in this build; the LIKE fallback needs no escaping")
+	}
+	if err := s.StoreChat("5511@s.whatsapp.net", "Chat", time.Now()); err != nil {
+		t.Fatalf("store chat: %v", err)
+	}
+	if err := s.StoreMessage(NewMessage{
+		ID: "Q1", ChatJID: "5511@s.whatsapp.net", Sender: "5511",
+		Content: `he said "hello" loudly`, Timestamp: time.Now(),
+	}); err != nil {
+		t.Fatalf("store message: %v", err)
+	}
+
+	// An odd number of quotes is what breaks: the MATCH expression ends
+	// mid-string and SQLite answers "unterminated string".
+	got, err := s.ListMessages(ListMessagesArgs{Query: `hello"`, Limit: 10})
+	if err != nil {
+		t.Fatalf("query with an unbalanced quote must not error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected the quoted term to match 1 message, got %d", len(got))
+	}
+
+	// A balanced pair has to keep working as a phrase search.
+	got, err = s.ListMessages(ListMessagesArgs{Query: `said "hello"`, Limit: 10})
+	if err != nil {
+		t.Fatalf("quoted phrase query: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected the quoted phrase to match 1 message, got %d", len(got))
+	}
+}

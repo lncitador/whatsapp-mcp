@@ -335,7 +335,9 @@ func (c *Client) handleMessage(msg *events.Message) {
 
 	chatJID = c.resolveToPN(chatJID)
 	senderJID := c.resolveToPN(msg.Info.Sender.String())
-	if i := strings.Index(senderJID, "@"); i >= 0 {
+	// i > 0, not i >= 0: a JID that somehow starts with "@" has no user half,
+	// and an empty sender would be stored as an unattributable message.
+	if i := strings.Index(senderJID, "@"); i > 0 {
 		sender = senderJID[:i]
 	}
 
@@ -694,6 +696,11 @@ func (c *Client) resolveToPN(jidStr string) string {
 		return jidStr
 	}
 	if jid.Server != "lid" {
+		return jidStr
+	}
+	// Runs from event-handler goroutines, where a socket that went away can
+	// leave the store behind; a LID we cannot map is better than a panic.
+	if c.wm == nil || c.wm.Store == nil || c.wm.Store.LIDs == nil {
 		return jidStr
 	}
 	pn, err := c.wm.Store.LIDs.GetPNForLID(context.Background(), jid)

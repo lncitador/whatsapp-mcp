@@ -53,9 +53,15 @@ func TakeoverPort(port int) error {
 			return nil
 		}
 	}
-	pid, err := readPIDFile()
-	if err != nil || pid <= 0 {
-		pid = pidOnPort(port)
+	// The PID file can be stale, and the OS reuses PIDs — killing whatever
+	// inherited it would take down an unrelated process. Whoever actually
+	// holds the port is the authoritative answer; the PID file is only
+	// trusted when the port owner cannot be determined (Windows, no lsof).
+	pid := pidOnPort(port)
+	if pid <= 0 {
+		if filePID, err := readPIDFile(); err == nil {
+			pid = filePID
+		}
 	}
 	if pid > 0 && pid != os.Getpid() {
 		if proc, err := os.FindProcess(pid); err == nil {

@@ -88,6 +88,13 @@ func synthesizeContent(msg *waProto.Message) string {
 	if reaction := msg.GetReactionMessage(); reaction != nil {
 		return fmt.Sprintf("[reação: %s a %s]", reaction.GetText(), reaction.GetKey().GetID())
 	}
+	// An album carries no content of its own — it is a header announcing how
+	// many images and videos follow as separate messages. Storing it keeps the
+	// grouping visible instead of leaving an unexplained gap in the thread.
+	if album := msg.GetAlbumMessage(); album != nil {
+		return fmt.Sprintf("[álbum: %d imagem(ns), %d vídeo(s)]",
+			album.GetExpectedImageCount(), album.GetExpectedVideoCount())
+	}
 	if btn := msg.GetButtonsResponseMessage(); btn != nil {
 		if text := btn.GetSelectedDisplayText(); text != "" {
 			return fmt.Sprintf("[botão: %s]", text)
@@ -534,9 +541,16 @@ func (c *Client) chatName(jid types.JID, chatJID string, conversation any, sende
 			}
 		}
 	} else {
-		contact, err := c.wm.Store.Contacts.GetContact(context.Background(), jid)
-		if err == nil && contact.FullName != "" {
-			name = contact.FullName
+		// The contact book is only consultable with a live session; fall back
+		// to the number rather than taking the daemon down with a nil deref.
+		var fullName string
+		if c.wm != nil && c.wm.Store != nil && c.wm.Store.Contacts != nil {
+			if contact, err := c.wm.Store.Contacts.GetContact(context.Background(), jid); err == nil {
+				fullName = contact.FullName
+			}
+		}
+		if fullName != "" {
+			name = fullName
 		} else if sender != "" {
 			name = sender
 		} else {

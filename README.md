@@ -60,6 +60,8 @@ Environment variables:
   whisper-cli isn't installed. See Transcription above.
 - `WHISPER_MODEL` — whisper.cpp model name (default: `base`). Only used when
   whisper-cli is installed.
+- `TRANSCRIBE_CONCURRENCY` — Maximum transcriptions running at once
+  (default: `1`). Extra voice notes and videos queue until a slot frees up.
 
 ## How it works
 

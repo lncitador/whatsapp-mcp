@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -439,6 +440,18 @@ func (c *Client) transcribeMessage(messageID, chatJID, mediaType string) {
 	c.doTranscribe(messageID, chatJID, mediaType, false)
 }
 
+// transcribeSlots caps concurrent whisper/OpenAI jobs. Every incoming audio
+// spawns a goroutine, so a history backfill would otherwise launch dozens of
+// whisper processes at once. Override with TRANSCRIBE_CONCURRENCY.
+var transcribeSlots = make(chan struct{}, transcribeConcurrency())
+
+func transcribeConcurrency() int {
+	if n, err := strconv.Atoi(os.Getenv("TRANSCRIBE_CONCURRENCY")); err == nil && n > 0 {
+		return n
+	}
+	return 1
+}
+
 type transcriptionOutput struct {
 	Text         string
 	MarkdownPath string
@@ -466,7 +479,9 @@ func (c *Client) doTranscribe(messageID, chatJID, mediaType string, force bool) 
 		mediaType = downloadedType
 	}
 
+	transcribeSlots <- struct{}{}
 	result, err := tr.Transcribe(localPath)
+	<-transcribeSlots
 	if err != nil {
 		c.logger.Warnf("Transcription failed for %s: %v", messageID, err)
 		return nil, "", fmt.Errorf("transcription failed: %v", err)
